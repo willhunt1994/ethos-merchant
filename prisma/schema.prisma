@@ -1,0 +1,227 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Shopify OAuth sessions (required by @shopify/shopify-app-session-storage-prisma)
+model Session {
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+}
+
+model Shop {
+  id            String   @id @default(cuid())
+  shopDomain    String   @unique
+  installedAt   DateTime @default(now())
+  uninstalledAt DateTime?
+  lastSyncAt    DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  supplierLinks ShopSupplierLink[]
+}
+
+enum ShopSupplierApprovalStatus {
+  pending
+  approved
+  rejected
+}
+
+model ShopSupplierLink {
+  id                 String                     @id @default(cuid())
+  shopId             String
+  shop               Shop                       @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  ethosSupplierId    Int
+  ethosSupplierSlug  String
+  approvalStatus     ShopSupplierApprovalStatus @default(pending)
+  approvedAt         DateTime?
+  approvedByUserRef  String?
+  createdAt          DateTime                   @default(now())
+  updatedAt          DateTime                   @updatedAt
+
+  @@unique([shopId, ethosSupplierSlug])
+  @@index([ethosSupplierSlug])
+}
+
+model MerchantUiPreference {
+  shopDomain       String   @id
+  productViewMode  String   @default("grid")
+  updatedAt        DateTime @updatedAt
+}
+
+enum AttachmentStatus {
+  pending
+  uploaded
+  failed
+}
+
+model ProductSelection {
+  id                String   @id @default(cuid())
+  shopDomain        String
+  shopifyProductGid String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  variantSelections VariantSelection[]
+  attachments       ProductAttachment[]
+
+  @@unique([shopDomain, shopifyProductGid])
+  @@index([shopDomain])
+}
+
+/// Staged design docs (CAD/spec) in S3 before Ethos Employee import (Phase 6).
+model ProductAttachment {
+  id                 String           @id @default(cuid())
+  shopDomain         String
+  shopifyProductGid  String
+  productSelectionId String?
+  productSelection   ProductSelection? @relation(fields: [productSelectionId], references: [id], onDelete: SetNull)
+  category           String
+  label              String?
+  storageKey         String           @unique
+  filename           String
+  contentType        String
+  byteSize           BigInt?
+  status             AttachmentStatus @default(pending)
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  @@index([shopDomain, shopifyProductGid])
+}
+
+model VariantSelection {
+  id                 String   @id @default(cuid())
+  productSelectionId String
+  productSelection   ProductSelection @relation(fields: [productSelectionId], references: [id], onDelete: Cascade)
+  shopifyVariantGid  String
+  ethosPrice         Decimal? @db.Decimal(10, 2)
+  selected           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([productSelectionId, shopifyVariantGid])
+}
+
+enum SubmissionStatus {
+  draft
+  submitted
+  processing
+  imported
+  needs_attention
+  failed
+}
+
+enum SubmissionLineStatus {
+  pending
+  processing
+  imported
+  needs_attention
+  failed
+}
+
+model Submission {
+  id                   String           @id @default(cuid())
+  shopDomain           String
+  idempotencyKey       String           @unique
+  status               SubmissionStatus @default(draft)
+  merchantInstructions String?          @db.Text
+  submittedAt          DateTime?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  lines SubmissionLine[]
+
+  @@index([shopDomain, status])
+}
+
+model SubmissionLine {
+  id                String               @id @default(cuid())
+  submissionId      String
+  submission        Submission           @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  shopifyProductGid String
+  shopifyVariantGids Json
+  ethosPrice        Decimal?             @db.Decimal(10, 2)
+  status            SubmissionLineStatus @default(pending)
+  errorMessage      String?              @db.Text
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  @@index([submissionId])
+}
+
+model ShopifyProductMap {
+  id                String   @id @default(cuid())
+  shopDomain        String
+  shopifyProductGid String
+  ethosSupplierSlug String
+  itemCode          String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  variants ShopifyVariantMap[]
+
+  @@unique([shopDomain, shopifyProductGid])
+  @@unique([shopDomain, ethosSupplierSlug, itemCode])
+}
+
+model ShopifyVariantMap {
+  id                    String   @id @default(cuid())
+  shopDomain            String
+  shopifyVariantGid     String   @unique
+  shopifyProductGid     String
+  shopifyProductMapId   String?
+  shopifyProductMap     ShopifyProductMap? @relation(fields: [shopifyProductMapId], references: [id], onDelete: SetNull)
+  ethosSupplierSlug     String
+  itemCode              String
+  color                 String
+  size                  String
+  shopifyBarcode        String?
+  countryOfOrigin       String?  @db.Char(2)
+  lastInventorySyncAt   DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([shopDomain, shopifyProductGid])
+  @@index([ethosSupplierSlug, itemCode])
+}
+
+model WebhookEvent {
+  id           String    @id @default(cuid())
+  shopDomain   String
+  topic        String
+  payloadHash  String
+  processedAt  DateTime?
+  errorMessage String?   @db.Text
+  createdAt    DateTime  @default(now())
+
+  @@unique([shopDomain, topic, payloadHash])
+  @@index([shopDomain, processedAt])
+}
+
+model SyncCursor {
+  shopDomain String
+  resource   String
+  cursor     String?
+  updatedAt  DateTime @updatedAt
+
+  @@id([shopDomain, resource])
+}

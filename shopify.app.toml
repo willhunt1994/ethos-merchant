@@ -1,0 +1,32 @@
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "79a36d8400b076734eb79911933f091e"
+name = "ethosmerchant"
+# Static URL for TOML validation only. While `pnpm dev` runs, the CLI must override this with your tunnel URL.
+# Never leave the live app pointed at example.com — Admin embeds this URL in an iframe.
+application_url = "https://example.com"
+embedded = true
+
+[build]
+automatically_update_urls_on_dev = true
+include_config_on_deploy = true
+
+[access_scopes]
+scopes = "read_products,read_inventory,read_locations"
+
+[auth]
+redirect_urls = [
+  "https://example.com/auth/callback",
+  "https://example.com/auth/shopify/callback",
+]
+
+[webhooks]
+api_version = "2027-01"
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/uninstalled"
+  topics = [ "app/uninstalled" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/scopes_update"
+  topics = [ "app/scopes_update" ]
