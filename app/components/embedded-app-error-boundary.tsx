@@ -48,7 +48,7 @@ function ErrorBody({ heading, message, isDev }: { heading: string; message: stri
 export function EmbeddedAppErrorBoundary({ heading = "Something went wrong" }: { heading?: string }) {
   const error = useRouteError();
   const root = useRouteLoaderData<typeof rootLoader>("root");
-  const isDev = root?.isDev ?? process.env.NODE_ENV !== "production";
+  const isDev = root?.isDev === true;
 
   if (isShopifyAppBridgeResponse(error)) {
     return boundary.error(error);
