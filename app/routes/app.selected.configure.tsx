@@ -5,7 +5,7 @@ import type {
   ShouldRevalidateFunctionArgs,
 } from "react-router";
 import { Link, useFetcher, useLoaderData } from "react-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useRouteActionFetcher } from "../lib/use-route-action-fetcher";
 import { EmbeddedAppErrorBoundary } from "../components/embedded-app-error-boundary";
 import { boundary } from "@shopify/shopify-app-react-router/server";
@@ -397,15 +397,18 @@ function categoryLabel(value: string, categories: typeof ATTACHMENT_CATEGORIES):
 }
 
 export default function ConfigureSelectedProductPage() {
-  const {
-    title,
-    shopifyProductGid,
-    attachments: loaderAttachments,
-    s3Configured,
-    categories,
-    maxBytes,
-    variants: loaderVariants,
-  } = useLoaderData<typeof loader>();
+  const data = useLoaderData<typeof loader>();
+  return <ConfigureSelectedProductPageInner key={data.shopifyProductGid} {...data} />;
+}
+
+function ConfigureSelectedProductPageInner({
+  title,
+  attachments: loaderAttachments,
+  s3Configured,
+  categories,
+  maxBytes,
+  variants: loaderVariants,
+}: Awaited<ReturnType<typeof loader>>) {
   const deleteFetcher = useFetcher();
   const actionFetcher = useRouteActionFetcher<
     | { ok: true; attachment: ClientProductAttachment }
@@ -423,10 +426,6 @@ export default function ConfigureSelectedProductPage() {
   const [variantRows, setVariantRows] = useState(loaderVariants);
   const [pricingSaved, setPricingSaved] = useState<string | null>(null);
   const [pricingError, setPricingError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setVariantRows(loaderVariants);
-  }, [loaderVariants]);
 
   const attachments = useMemo(() => {
     const fromLoader = loaderAttachments.filter((a) => !removedIds.has(a.id));

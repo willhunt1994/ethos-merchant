@@ -43,7 +43,7 @@ async function loadCatalogProducts(
 
   if (ctx.mode === "preview") {
     const q = params.q.toLowerCase();
-    let list = MOCK_CATALOG_PRODUCTS.filter((p) => {
+    const list = MOCK_CATALOG_PRODUCTS.filter((p) => {
       if (q && !p.title.toLowerCase().includes(q) && !p.vendor.toLowerCase().includes(q)) return false;
       if (params.status && p.status !== params.status) return false;
       if (params.vendor && !p.vendor.toLowerCase().includes(params.vendor.toLowerCase())) return false;
@@ -342,7 +342,7 @@ export default function ProductsPage() {
                 style={{ width: "100%", aspectRatio: "1", objectFit: "cover" }}
               />
               <div style={{ padding: "12px" }}>
-                <label style={{ display: "flex", gap: "8px", alignItems: "flex-start" }}>
+                <div style={{ display: "flex", gap: "8px", alignItems: "flex-start" }}>
                   <ProductCheckbox product={product} />
                   <span>
                     <strong>{product.title}</strong>
@@ -352,7 +352,7 @@ export default function ProductsPage() {
                     </div>
                     <div style={{ fontSize: "12px", marginTop: "4px" }}>{submissionLabel(product.submissionStatus)}</div>
                   </span>
-                </label>
+                </div>
               </div>
             </article>
           ))}

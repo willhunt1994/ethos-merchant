@@ -1,8 +1,7 @@
-import type { LoaderFunctionArgs } from "react-router";
 import { Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
 
 /** Available to route error boundaries (e.g. when `/app` loader fails before rendering AppProvider). */
-export const loader = async ({ request: _request }: LoaderFunctionArgs) => ({
+export const loader = async () => ({
   apiKey: process.env.SHOPIFY_API_KEY?.trim() ?? "",
   isDev: process.env.NODE_ENV !== "production",
 });
