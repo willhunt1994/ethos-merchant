@@ -10,6 +10,8 @@ ENV NODE_ENV=production
 RUN corepack enable && corepack prepare pnpm@10.28.0 --activate
 
 COPY package.json pnpm-lock.yaml ./
+# postinstall runs `prisma generate`; schema must exist before install
+COPY prisma ./prisma
 RUN pnpm install --frozen-lockfile
 
 COPY . .
