@@ -6,6 +6,12 @@ export type EthosImportAttachment = {
   category?: string | null;
 };
 
+export type EthosImportQuantityTier = {
+  minQty: number;
+  maxQty: number;
+  price: number;
+};
+
 export type EthosImportVariant = {
   shopifyVariantGid: string;
   color: string;
@@ -13,6 +19,7 @@ export type EthosImportVariant = {
   supplierSku?: string | null;
   quantity: number;
   ethosPrice: number;
+  quantityTierPricing?: EthosImportQuantityTier[];
 };
 
 export type EthosImportProductPayload = {

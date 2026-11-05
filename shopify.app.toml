@@ -8,7 +8,9 @@ application_url = "https://ethos-merchant-shopify-production.up.railway.app"
 embedded = true
 
 [build]
-automatically_update_urls_on_dev = true
+# Keep false for the live app: `pnpm dev` must not overwrite Partner URLs with a dead trycloudflare tunnel.
+# Local dev: use the CLI Preview URL (press `p`) or run `pnpm run deploy:shopify` after a dev session if you temporarily changed URLs.
+automatically_update_urls_on_dev = false
 
 [access_scopes]
 scopes = "read_products,read_inventory,read_locations"

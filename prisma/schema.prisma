@@ -34,6 +34,21 @@ model Shop {
   installedAt   DateTime @default(now())
   uninstalledAt DateTime?
   lastSyncAt    DateTime?
+  w9LegalBusinessName String?
+  w9BusinessAddress   String? @db.Text
+  w9FormStorageKey    String?
+  w9FormFilename      String?
+  w9FormContentType   String?
+  w9FormUploadedAt    DateTime?
+  w9FormVerifiedAt    DateTime?
+  stripeConnectAccountId        String?   @unique
+  stripeConnectOnboardingStatus String?
+  stripePayoutsEnabled          Boolean?
+  stripeRequirementsDue         Json?
+  ethosPayoutsEnabled           Boolean   @default(false)
+  ethosPayoutsNote              String?   @db.Text
+  stripeConnectSyncedAt         DateTime?
+  quantityBreakTiers            Json?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -78,8 +93,11 @@ model ProductSelection {
   id                  String   @id @default(cuid())
   shopDomain          String
   shopifyProductGid   String
-  offerCustomization  Boolean  @default(false)
-  createdAt           DateTime @default(now())
+  offerCustomization       Boolean  @default(false)
+  offerQuantityDiscounts   Boolean  @default(false)
+  useCustomQuantityBreaks  Boolean  @default(false)
+  customizationTypeIds     Json     @default("[]")
+  createdAt                DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
   variantSelections VariantSelection[]
@@ -113,9 +131,10 @@ model VariantSelection {
   id                 String   @id @default(cuid())
   productSelectionId String
   productSelection   ProductSelection @relation(fields: [productSelectionId], references: [id], onDelete: Cascade)
-  shopifyVariantGid  String
-  ethosPrice         Decimal? @db.Decimal(10, 2)
-  selected           Boolean  @default(true)
+  shopifyVariantGid     String
+  ethosPrice            Decimal? @db.Decimal(10, 2)
+  ethosQuantityPricing  Json?
+  selected              Boolean  @default(true)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 

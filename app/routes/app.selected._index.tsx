@@ -1,6 +1,6 @@
 import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { Form, Link, useActionData, useLoaderData, useNavigation } from "react-router";
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import prisma from "../db.server";
 import { PLACEHOLDER_IMAGE } from "../lib/catalog-product";
@@ -16,10 +16,24 @@ import {
   type SubmissionDisplayStatus,
 } from "../lib/product-selection.server";
 import { submitSelectedProducts, type SubmitSelectionResult } from "../lib/submission.server";
+import {
+  quantityTierStringsFromStorage,
+  variantPricingCompleteForProduct,
+} from "../lib/quantity-pricing";
+import { getShopQuantityBreakTiers } from "../lib/shop-quantity-tiers.server";
+import {
+  customizationTypeLabelsFromIds,
+  hasRequiredCustomizationTypes,
+  parseCustomizationTypeIds,
+} from "../lib/product-customization-types";
+import {
+  ConfigOptionTag,
+  ConfigStatusRow,
+} from "../components/embedded/config-check-item";
 
 const SUBMISSION_STEPS = [
-  "Set Ethos price on every selected variant",
-  "Upload design files",
+  "Set at least the 1–24 pcs price on every selected variant (extra tiers optional)",
+  "When offering customization, choose at least one customization type and upload design files",
   "Submit items to the Ethos catalog when complete.",
 ] as const;
 
@@ -46,14 +60,33 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   });
   const importedByGid = new Map(importedMaps.map((m) => [m.shopifyProductGid, m.itemCode]));
   const submissionStatusByGid = await getSubmissionStatusByProductGid(ctx.shopDomain, gids);
+  const quantityBreakTiers = await getShopQuantityBreakTiers(ctx.shopDomain);
 
   const rows = selections.map((sel) => {
     const mock = mockById.get(sel.shopifyProductGid);
     const live = liveSummaries.get(sel.shopifyProductGid);
     const variants = sel.variantSelections;
-    const pricedCount = variants.filter((v) => v.ethosPrice != null && Number(v.ethosPrice) > 0).length;
+    const pricedCount = variants.filter((v) => {
+      const tiers = quantityTierStringsFromStorage(
+        v.ethosQuantityPricing,
+        v.ethosPrice?.toString(),
+        quantityBreakTiers,
+      );
+      return variantPricingCompleteForProduct(
+        tiers,
+        sel.offerQuantityDiscounts,
+        quantityBreakTiers,
+      );
+    }).length;
     const pricingComplete = variants.length > 0 && pricedCount === variants.length;
-    const designComplete = !sel.offerCustomization || sel.attachments.length > 0;
+    const customizationTypeIds = parseCustomizationTypeIds(sel.customizationTypeIds);
+    const customizationTypesComplete = hasRequiredCustomizationTypes(
+      sel.offerCustomization,
+      customizationTypeIds,
+    );
+    const designComplete =
+      customizationTypesComplete &&
+      (!sel.offerCustomization || sel.attachments.length > 0);
     const readyForSubmit =
       pricingComplete && designComplete && !importedByGid.has(sel.shopifyProductGid);
     return {
@@ -62,6 +95,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       imageUrl: live?.imageUrl ?? mock?.imageUrl ?? null,
       variantCount: variants.length,
       offerCustomization: sel.offerCustomization,
+      customizationTypeCount: customizationTypeIds.length,
+      customizationTypeLabels: customizationTypeLabelsFromIds(customizationTypeIds),
       attachmentCount: sel.attachments.length,
       pricedCount,
       readyForSubmit,
@@ -111,10 +146,12 @@ function productNeedsConfiguring(row: {
   variantCount: number;
   pricedCount: number;
   attachmentCount: number;
+  customizationTypeCount: number;
   offerCustomization: boolean;
 }): boolean {
   if (row.readyForSubmit) return false;
   if (row.variantCount === 0 || row.pricedCount < row.variantCount) return true;
+  if (row.offerCustomization && row.customizationTypeCount === 0) return true;
   if (row.offerCustomization && row.attachmentCount === 0) return true;
   return false;
 }
@@ -128,6 +165,8 @@ function RowStatusBadges({
     variantCount: number;
     pricedCount: number;
     attachmentCount: number;
+    customizationTypeCount: number;
+    customizationTypeLabels: string[];
     offerCustomization: boolean;
     submissionStatus: SubmissionDisplayStatus;
   };
@@ -165,6 +204,16 @@ type RowStatusFilter =
   | "ready_to_submit"
   | "needs_configuring";
 
+type SelectedListTab = "to_be_submitted" | "submitted";
+
+function isSubmittedRow(row: RowForStatus): boolean {
+  return (
+    Boolean(row.importedItemCode) ||
+    row.submissionStatus === "imported" ||
+    row.submissionStatus === "submitted"
+  );
+}
+
 function rowStatusTagKind(
   row: RowForStatus,
 ): RowStatusFilter | null {
@@ -181,33 +230,51 @@ function rowStatusTagKind(
   return null;
 }
 
-function ConfigCheckItem({ done, label }: { done: boolean; label: string }) {
-  return (
-    <li className={styles.configCheckRow}>
-      <span className={styles.configCheckLabel}>
-        <span
-          className={done ? styles.configCheckBoxDone : styles.configCheckBoxPending}
-          aria-hidden
-        >
-          {done ? "✓" : ""}
-        </span>
-        {label}
-      </span>
-    </li>
-  );
-}
-
 function ProductConfigurationSummary({ row }: { row: RowForStatus }) {
   const pricingSet =
     row.variantCount > 0 && row.pricedCount === row.variantCount;
   const filesComplete = row.attachmentCount > 0;
+  const typesComplete =
+    !row.offerCustomization || row.customizationTypeCount > 0;
+  const pricingDetail =
+    row.variantCount > 0
+      ? pricingSet
+        ? `${row.variantCount} variant${row.variantCount === 1 ? "" : "s"}`
+        : `${row.pricedCount}/${row.variantCount} priced`
+      : "No variants";
 
   return (
-    <ul className={styles.productConfigList}>
-      <ConfigCheckItem done={pricingSet} label="Pricing Set" />
-      <ConfigCheckItem done={row.offerCustomization} label="Offer Customization" />
-      <ConfigCheckItem done={filesComplete} label="Design Files Uploaded" />
-    </ul>
+    <div className={styles.productConfigCard} aria-label="Configuration progress">
+      <ConfigStatusRow done={pricingSet} label="Pricing" detail={pricingDetail} />
+      {row.offerCustomization ? (
+        <ConfigStatusRow
+          done={typesComplete && filesComplete}
+          label="Customization"
+          detail={
+            filesComplete
+              ? `${row.attachmentCount} file${row.attachmentCount === 1 ? "" : "s"}`
+              : undefined
+          }
+        >
+          <div className={styles.customizationOptionTags}>
+            {row.customizationTypeLabels.length > 0 ? (
+              row.customizationTypeLabels.map((label) => (
+                <ConfigOptionTag key={label} tone="done">
+                  {label}
+                </ConfigOptionTag>
+              ))
+            ) : (
+              <ConfigOptionTag tone="pending">No Types Selected</ConfigOptionTag>
+            )}
+            {!filesComplete ? (
+              <ConfigOptionTag tone="pending">Design File Needed</ConfigOptionTag>
+            ) : null}
+          </div>
+        </ConfigStatusRow>
+      ) : (
+        <ConfigStatusRow done label="Customization" detail="Not offered" />
+      )}
+    </div>
   );
 }
 
@@ -236,6 +303,45 @@ function SummaryFilterPill({
   );
 }
 
+function SelectedListTabs({
+  activeTab,
+  onTabChange,
+  toBeSubmittedCount,
+  submittedCount,
+}: {
+  activeTab: SelectedListTab;
+  onTabChange: (tab: SelectedListTab) => void;
+  toBeSubmittedCount: number;
+  submittedCount: number;
+}) {
+  return (
+    <div className={styles.selectedListTabs} role="tablist" aria-label="Selected products">
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeTab === "to_be_submitted"}
+        className={`${styles.selectedListTab} ${
+          activeTab === "to_be_submitted" ? styles.selectedListTabActive : ""
+        }`}
+        onClick={() => onTabChange("to_be_submitted")}
+      >
+        To Be Submitted ({toBeSubmittedCount})
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeTab === "submitted"}
+        className={`${styles.selectedListTab} ${
+          activeTab === "submitted" ? styles.selectedListTabActive : ""
+        }`}
+        onClick={() => onTabChange("submitted")}
+      >
+        Submitted ({submittedCount})
+      </button>
+    </div>
+  );
+}
+
 function SelectedSummaryBadges({
   rows,
   statusFilter,
@@ -247,13 +353,13 @@ function SelectedSummaryBadges({
 }) {
   const counts = useMemo(() => {
     const tally = {
-      submitted: 0,
       needs_attention: 0,
       ready_to_submit: 0,
       needs_configuring: 0,
     };
     for (const row of rows) {
       const kind = rowStatusTagKind(row);
+      if (kind === "submitted") continue;
       if (kind) tally[kind] += 1;
     }
     return tally;
@@ -266,7 +372,7 @@ function SelectedSummaryBadges({
   return (
     <div className={styles.selectedSummaryRow}>
       <span className={styles.selectedSummaryCount}>
-        {rows.length} product(s) selected
+        {rows.length} in queue
         {statusFilter ? " · filtered" : ""}
       </span>
       {counts.ready_to_submit > 0 ? (
@@ -277,16 +383,6 @@ function SelectedSummaryBadges({
         >
           Ready To Submit
           {counts.ready_to_submit > 1 ? ` (${counts.ready_to_submit})` : ""}
-        </SummaryFilterPill>
-      ) : null}
-      {counts.submitted > 0 ? (
-        <SummaryFilterPill
-          active={statusFilter === "submitted"}
-          onClick={() => toggle("submitted")}
-          className={styles.attachmentStatusTagSuccess}
-        >
-          Submitted
-          {counts.submitted > 1 ? ` (${counts.submitted})` : ""}
         </SummaryFilterPill>
       ) : null}
       {counts.needs_configuring > 0 ? (
@@ -341,11 +437,31 @@ export default function SelectedProductsPage() {
     justFinishedSubmit,
   });
   const showSubmittedButton = submitLabel === "Submitted";
+  const [listTab, setListTab] = useState<SelectedListTab>("to_be_submitted");
   const [statusFilter, setStatusFilter] = useState<RowStatusFilter | null>(null);
+
+  useEffect(() => {
+    if (!actionData || !(actionData.ok || actionData.imported > 0)) return;
+    queueMicrotask(() => {
+      setListTab("submitted");
+      setStatusFilter(null);
+    });
+  }, [actionData]);
+
+  const submittedRows = useMemo(() => rows.filter(isSubmittedRow), [rows]);
+  const toBeSubmittedRows = useMemo(() => rows.filter((row) => !isSubmittedRow(row)), [rows]);
+
+  const tabRows = listTab === "submitted" ? submittedRows : toBeSubmittedRows;
+
   const filteredRows = useMemo(() => {
-    if (!statusFilter) return rows;
-    return rows.filter((row) => rowStatusTagKind(row) === statusFilter);
-  }, [rows, statusFilter]);
+    if (!statusFilter || listTab === "submitted") return tabRows;
+    return tabRows.filter((row) => rowStatusTagKind(row) === statusFilter);
+  }, [tabRows, statusFilter, listTab]);
+
+  const handleListTabChange = (tab: SelectedListTab) => {
+    setListTab(tab);
+    setStatusFilter(null);
+  };
 
   return (
     <s-page>
@@ -409,13 +525,30 @@ export default function SelectedProductsPage() {
           />
         ) : (
           <>
-            <SelectedSummaryBadges
-              rows={rows}
-              statusFilter={statusFilter}
-              onStatusFilterChange={setStatusFilter}
+            <SelectedListTabs
+              activeTab={listTab}
+              onTabChange={handleListTabChange}
+              toBeSubmittedCount={toBeSubmittedRows.length}
+              submittedCount={submittedRows.length}
             />
+            {listTab === "to_be_submitted" ? (
+              <SelectedSummaryBadges
+                rows={toBeSubmittedRows}
+                statusFilter={statusFilter}
+                onStatusFilterChange={setStatusFilter}
+              />
+            ) : (
+              <p className={styles.productMeta}>
+                {submittedRows.length} product(s) sent to Ethos. Configure and submit new items
+                under To Be Submitted.
+              </p>
+            )}
             {filteredRows.length === 0 ? (
-              <p className={styles.productMeta}>No products match this filter.</p>
+              <p className={styles.productMeta}>
+                {listTab === "submitted"
+                  ? "Nothing submitted yet."
+                  : "No products match this filter."}
+              </p>
             ) : null}
             <ul className={styles.rowList}>
               {filteredRows.map((row) => (
@@ -440,24 +573,26 @@ export default function SelectedProductsPage() {
                 </li>
               ))}
             </ul>
-            <div className={styles.selectedSubmitBar}>
-              <Form method="post">
-                <input type="hidden" name="intent" value="submit-all" />
-                <button
-                  type="submit"
-                  className={
-                    showSubmittedButton
-                      ? `${styles.primarySubmitButton} ${styles.primarySubmitButtonSubmitted}`
-                      : styles.primarySubmitButton
-                  }
-                  disabled={
-                    !supplier.canSubmit || readyCount === 0 || submitting || showSubmittedButton
-                  }
-                >
-                  {submitLabel}
-                </button>
-              </Form>
-            </div>
+            {listTab === "to_be_submitted" ? (
+              <div className={styles.selectedSubmitBar}>
+                <Form method="post">
+                  <input type="hidden" name="intent" value="submit-all" />
+                  <button
+                    type="submit"
+                    className={
+                      showSubmittedButton
+                        ? `${styles.primarySubmitButton} ${styles.primarySubmitButtonSubmitted}`
+                        : styles.primarySubmitButton
+                    }
+                    disabled={
+                      !supplier.canSubmit || readyCount === 0 || submitting || showSubmittedButton
+                    }
+                  >
+                    {submitLabel}
+                  </button>
+                </Form>
+              </div>
+            ) : null}
           </>
         )}
       </s-section>

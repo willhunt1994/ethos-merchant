@@ -22,9 +22,14 @@ const CONFIGURE_VARIANTS_QUERY = `#graphql
         nodes {
           id
           title
+          displayName
           sku
-          price
           inventoryQuantity
+          inventoryItem {
+            unitCost {
+              amount
+            }
+          }
           selectedOptions {
             name
             value
@@ -74,9 +79,10 @@ export async function fetchConfigureVariants(
           nodes: Array<{
             id: string;
             title: string;
+            displayName?: string | null;
             sku?: string | null;
-            price?: string;
             inventoryQuantity?: number | null;
+            inventoryItem?: { unitCost?: { amount?: string | null } | null } | null;
             selectedOptions?: Array<{ name: string; value: string }>;
           }>;
         };
@@ -93,11 +99,15 @@ export async function fetchConfigureVariants(
   const nodes = product?.variants?.nodes ?? [];
   const variants = nodes.map((node) => {
     const { color, size } = mapShopifyVariantOptions(node.selectedOptions ?? [], node.title);
+    const costAmount = node.inventoryItem?.unitCost?.amount?.trim();
+    const title =
+      node.displayName?.trim() || node.title?.trim() || node.id;
     return {
       id: node.id,
-      title: node.title,
+      title,
       sku: node.sku?.trim() || null,
-      shopifyPrice: node.price ?? "0.00",
+      /** Merchant cost per unit from Shopify (InventoryItem.unitCost), not retail price. */
+      shopifyPrice: costAmount ? costAmount : "—",
       inventoryQuantity: node.inventoryQuantity ?? 0,
       color,
       size,

@@ -387,7 +387,7 @@ function ProductsPageContent({
               aria-label="Product type filter"
               onChange={submitProductFilters}
             >
-              <option value="">All product types</option>
+              <option value="">All Product Types</option>
               {productTypeOptions.map((option) => (
                 <option
                   key={option.productType}

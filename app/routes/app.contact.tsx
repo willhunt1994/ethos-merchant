@@ -167,8 +167,8 @@ export default function ContactPage() {
     <s-page>
       <div className={styles.pageTitleRow}>
         <h1 className={styles.pageHeading}>Contact</h1>
-        <Link to="/app/settings" className={styles.settingsButton}>
-          Back to Settings
+        <Link to="/app" className={styles.settingsButton}>
+          Back to Dashboard
         </Link>
       </div>
 

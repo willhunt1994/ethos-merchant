@@ -144,11 +144,46 @@ async function checkEmployeeApi() {
   }
 }
 
+async function checkShopPayoutApi() {
+  const appUrl = process.env.SHOPIFY_APP_URL?.trim().replace(/\/+$/, "");
+  const key = process.env.ETHOS_INTEGRATION_API_KEY?.trim();
+  if (!appUrl || !key) {
+    pass("Shop payout API check skipped (SHOPIFY_APP_URL or ETHOS_INTEGRATION_API_KEY unset)");
+    return;
+  }
+
+  let res;
+  try {
+    res = await fetch(`${appUrl}/integrations/shopify/v1/shop-payout?limit=5`, {
+      headers: { Authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(12000),
+    });
+  } catch (e) {
+    fail(`Shop payout API unreachable at ${appUrl}: ${e instanceof Error ? e.message : e}`);
+    return;
+  }
+  if (res.status === 401 || res.status === 403) {
+    fail("Shop payout API auth rejected");
+    return;
+  }
+  if (!res.ok) {
+    fail(`Shop payout API returned ${res.status}`);
+    return;
+  }
+  const body = await res.json().catch(() => null);
+  if (!body?.ok || !Array.isArray(body.payouts)) {
+    fail("Shop payout API response shape unexpected");
+    return;
+  }
+  pass(`Shop payout API OK (${body.payouts.length} shop(s) in sample)`);
+}
+
 async function main() {
   console.log(`\nEthos merchant E2E smoke — dev store: ${DEV_STORE}\n`);
 
   const prisma = await checkDatabase();
   await checkEmployeeApi();
+  await checkShopPayoutApi();
   if (prisma) {
     try {
       await checkMerchantData(prisma);

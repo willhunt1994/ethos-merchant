@@ -13,6 +13,7 @@ Shopify embedded app for merchants to submit catalog products to **Ethos Employe
 - [Repository audit](./docs/repository-audit.md)
 - [Field mapping](./docs/shopify-ethos-field-mapping.md)
 - [Schema gap analysis & approvals](./docs/shopify-ethos-schema-gap-analysis.md)
+- [Stripe Connect payouts](./docs/stripe-connect-payouts.md)
 
 ## GitHub
 
@@ -28,7 +29,8 @@ Copy [`.env.example`](./.env.example) to `.env`.
 | `DATABASE_URL` | Railway Postgres |
 | `SHOPIFY_*`, `SCOPES` | Partner app (read-only catalog scopes) |
 | `LOCAL_PREVIEW=1` | Dev-only mock UI (no Shopify OAuth) |
-| `ETHOS_INTEGRATION_*` | Employee API (later phases) |
+| `ETHOS_INTEGRATION_*` | Employee API (link, submit, payout admin) |
+| `STRIPE_*` | Connect Express bank onboarding + webhooks |
 
 ### Database access
 
@@ -63,6 +65,20 @@ pnpm dev
 # UI-only with mock products (no Shopify session)
 LOCAL_PREVIEW=1 pnpm dev
 ```
+
+### Admin shows trycloudflare / “server IP could not be found”
+
+Shopify is embedding a **dead dev tunnel** instead of production. That happens when `pnpm dev` updated Partner **App URL** to `*.trycloudflare.com` and dev was stopped.
+
+**Fix now:** from repo root run `pnpm run deploy:shopify` (points App URL back to Railway). Hard-refresh Admin or reopen the app.
+
+**Prevent:** `shopify.app.toml` sets `automatically_update_urls_on_dev = false` so local dev does not overwrite the live Partner URL. While **`shopify app dev` is running**, Admin can still load a **dev preview** tunnel (badge “dev previews” in the corner)—that overrides version 5 until you stop dev or run:
+
+```bash
+shopify app dev clean
+```
+
+Use the CLI **Preview URL** (`p` while dev runs) for tunnel testing; use [production Admin](https://admin.shopify.com/store/ethos-merchant/apps/ethosmerchant) for Railway. When you finish local dev, run **`shopify app dev clean`** (or quit dev with **`q`**) so the store loads production again.
 
 ### Admin shows “Example Domain” in the app iframe
 

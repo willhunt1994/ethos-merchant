@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 300" role="img" aria-label="Puff print example">
+  <rect width="500" height="300" fill="#f3f0ea"/>
+  <rect x="155" y="95" width="190" height="88" rx="10" fill="#ffffff" stroke="#c9cccf"/>
+  <text x="250" y="148" text-anchor="middle" font-family="system-ui,sans-serif" font-size="42" font-weight="700" fill="#202223">LOGO</text>
+  <ellipse cx="250" cy="168" rx="72" ry="10" fill="#000" opacity="0.08"/>
+  <text x="250" y="248" text-anchor="middle" font-family="system-ui,sans-serif" font-size="18" fill="#6d7175">Puff Print</text>
+</svg>

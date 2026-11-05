@@ -7,13 +7,41 @@ import {
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
 import prisma from "./db.server";
 import { maybeApplyDevSupplierLink } from "./lib/shop-supplier.server";
+import { isLocalPreviewEnabled } from "./config/env.server";
+
+/** Partner app client_id from shopify.app.toml — App Bridge only in LOCAL_PREVIEW. */
+const PREVIEW_SHOPIFY_API_KEY = "79a36d8400b076734eb79911933f091e";
+
+function resolvedShopifyAppUrl(): string {
+  const fromEnv = process.env.SHOPIFY_APP_URL?.trim();
+  if (fromEnv) return fromEnv;
+  if (isLocalPreviewEnabled()) {
+    const port = process.env.PORT?.trim() || "3000";
+    return `http://localhost:${port}`;
+  }
+  return "";
+}
+
+function resolvedShopifyCredentials(): { apiKey: string; apiSecretKey: string; scopes: string[] } {
+  const preview = isLocalPreviewEnabled();
+  const apiKey = process.env.SHOPIFY_API_KEY?.trim() || (preview ? PREVIEW_SHOPIFY_API_KEY : "");
+  const apiSecretKey =
+    process.env.SHOPIFY_API_SECRET?.trim() ||
+    (preview ? "local-preview-shopify-api-secret-not-used" : "");
+  const scopes =
+    process.env.SCOPES?.split(",").map((s) => s.trim()).filter(Boolean) ??
+    (preview ? ["read_products", "read_inventory", "read_locations"] : []);
+  return { apiKey, apiSecretKey, scopes };
+}
+
+const { apiKey, apiSecretKey, scopes } = resolvedShopifyCredentials();
 
 const shopify = shopifyApp({
-  apiKey: process.env.SHOPIFY_API_KEY,
-  apiSecretKey: process.env.SHOPIFY_API_SECRET || "",
+  apiKey,
+  apiSecretKey,
   apiVersion: ApiVersion.October26,
-  scopes: process.env.SCOPES?.split(","),
-  appUrl: process.env.SHOPIFY_APP_URL || "",
+  scopes,
+  appUrl: resolvedShopifyAppUrl(),
   authPathPrefix: "/auth",
   sessionStorage: new PrismaSessionStorage(prisma, {
     connectionRetries: 5,

@@ -9,6 +9,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouteActionFetcher } from "../lib/use-route-action-fetcher";
 import { EmbeddedAppErrorBoundary } from "../components/embedded-app-error-boundary";
 import { PdfDropzonePreview } from "../components/embedded/pdf-dropzone-preview";
+import { ConfigOptionTag } from "../components/embedded/config-check-item";
+import { CustomizationTypeMedia } from "../components/embedded/customization-type-media";
+import {
+  SpreadsheetTierMargin,
+  VariantTableMargin,
+} from "../components/embedded/spreadsheet-tier-margin";
 import { UploadedAttachmentPreview } from "../components/embedded/uploaded-attachment-preview";
 import { renderPdfPageDataUrls } from "../lib/pdf-preview.client";
 import styles from "../styles/embedded-app.module.css";
@@ -21,7 +27,11 @@ import {
   type ClientProductAttachment,
 } from "../lib/attachments.server";
 import { PLACEHOLDER_IMAGE } from "../lib/catalog-product";
-import { MOCK_CATALOG_PRODUCTS } from "../lib/mock-catalog";
+import {
+  findMockCatalogProduct,
+  findMockCatalogVariant,
+  MOCK_CATALOG_PRODUCTS,
+} from "../lib/mock-catalog";
 import { requireMerchantContext } from "../lib/merchant-auth.server";
 import { fetchProductSummariesByGids } from "../lib/shopify/products.server";
 import { fetchConfigureVariants } from "../lib/shopify/variants.server";
@@ -41,6 +51,66 @@ import {
   merchantAttachmentStorageKey,
   putPrivateObject,
 } from "../lib/s3.server";
+import {
+  emptyQuantityTierPriceStrings,
+  primaryEthosPriceFromTierStrings,
+  quantityTierStringsFromStorage,
+  quantityTierStringsToJson,
+  remapQuantityTierPriceStrings,
+} from "../lib/quantity-pricing";
+import { quantityBreakTiersForProduct } from "../lib/quantity-tier-definitions";
+import { getShopQuantityBreakTiers } from "../lib/shop-quantity-tiers.server";
+import {
+  defaultGoalMarginPercentsForTierCount,
+  parseGoalMarginPercentInput,
+  suggestedTierPricesForVariant,
+} from "../lib/quantity-tier-goal-margins";
+import {
+  parseCustomizationTypeIds,
+  PRODUCT_CUSTOMIZATION_TYPES,
+  type ProductCustomizationTypeId,
+  CUSTOMIZATION_TYPE_FEE_NOTE,
+  CUSTOMIZATION_TYPE_SELECTION_INTRO,
+  customizationTypeCardInfoLines,
+  hasRequiredCustomizationTypes,
+} from "../lib/product-customization-types";
+
+export type ConfigureVariantRow = {
+  shopifyVariantGid: string;
+  title: string;
+  sku: string | null;
+  shopifyPrice: string;
+  ethosPrice: string | null;
+  quantityTierPrices: string[];
+  selected: boolean;
+};
+
+function normalizedEthosPriceKey(ethosPrice: string | null | undefined): string | null {
+  const trimmed = String(ethosPrice ?? "").trim();
+  if (!trimmed) return null;
+  const n = Number(trimmed);
+  if (Number.isFinite(n)) return n.toFixed(2);
+  return trimmed;
+}
+
+/** True when every selected variant has the same non-empty Ethos price (or ≤1 selected). */
+function selectedVariantsShareSameEthosPrice(rows: ConfigureVariantRow[]): boolean {
+  const selected = rows.filter((r) => r.selected);
+  if (selected.length <= 1) return true;
+  const keys = selected.map((r) => normalizedEthosPriceKey(r.ethosPrice));
+  if (keys.some((k) => k == null)) return false;
+  return keys.every((k) => k === keys[0]);
+}
+
+function customizationTypeIdsEqual(
+  a: ProductCustomizationTypeId[],
+  b: ProductCustomizationTypeId[],
+): boolean {
+  if (a.length !== b.length) return false;
+  const left = [...a].sort();
+  const right = [...b].sort();
+  return left.every((id, index) => id === right[index]);
+}
 
 function productGidFromRequest(request: Request): string | null {
   const params = new URL(request.url).searchParams;
@@ -68,40 +138,80 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     throw new Response("Product is not in your selection", { status: 404 });
   }
 
-  let configureVariants: Array<{
-    shopifyVariantGid: string;
-    title: string;
-    sku: string | null;
-    shopifyPrice: string;
-    ethosPrice: string | null;
-    selected: boolean;
-  }> = [];
+  const shopQuantityBreakTiers = await getShopQuantityBreakTiers(ctx.shopDomain);
+  const useCustomQuantityBreaks = selection.useCustomQuantityBreaks;
+  const quantityBreakTiers = quantityBreakTiersForProduct(
+    useCustomQuantityBreaks,
+    shopQuantityBreakTiers,
+  );
+
+  const storedByGid = new Map(
+    selection.variantSelections.map((v) => [
+      v.shopifyVariantGid,
+      {
+        ethosPrice: v.ethosPrice?.toString() ?? null,
+        quantityTierPrices: quantityTierStringsFromStorage(
+          v.ethosQuantityPricing,
+          v.ethosPrice?.toString() ?? null,
+          quantityBreakTiers,
+        ),
+        selected: v.selected,
+      },
+    ]),
+  );
+  const selectedByGid = new Map(
+    selection.variantSelections.map((v) => [v.shopifyVariantGid, v.selected]),
+  );
+
+  function rowFromSources(
+    variantGid: string,
+    meta: { title: string; sku: string | null; shopifyPrice: string },
+  ): ConfigureVariantRow {
+    const stored = storedByGid.get(variantGid);
+    const quantityTierPrices =
+      stored?.quantityTierPrices ?? emptyQuantityTierPriceStrings(quantityBreakTiers);
+    const ethosPrice =
+      primaryEthosPriceFromTierStrings(quantityTierPrices, quantityBreakTiers) ||
+      stored?.ethosPrice ||
+      null;
+    return {
+      shopifyVariantGid: variantGid,
+      title: meta.title,
+      sku: meta.sku,
+      shopifyPrice: meta.shopifyPrice,
+      ethosPrice,
+      quantityTierPrices,
+      selected: selectedByGid.has(variantGid) ? Boolean(selectedByGid.get(variantGid)) : true,
+    };
+  }
+
+  let configureVariants: ConfigureVariantRow[] = [];
 
   if (ctx.mode === "shopify" && ctx.admin) {
     const { variants } = await fetchConfigureVariants(ctx.admin, shopifyProductGid);
-    const priceByGid = new Map(
-      selection.variantSelections.map((v) => [v.shopifyVariantGid, v.ethosPrice?.toString() ?? null]),
+    configureVariants = variants.map((v) =>
+      rowFromSources(v.id, { title: v.title, sku: v.sku, shopifyPrice: v.shopifyPrice }),
     );
-    const selectedByGid = new Map(
-      selection.variantSelections.map((v) => [v.shopifyVariantGid, v.selected]),
-    );
-    configureVariants = variants.map((v) => ({
-      shopifyVariantGid: v.id,
-      title: v.title,
-      sku: v.sku,
-      shopifyPrice: v.shopifyPrice,
-      ethosPrice: priceByGid.get(v.id) ?? null,
-      selected: selectedByGid.has(v.id) ? Boolean(selectedByGid.get(v.id)) : true,
-    }));
   } else {
-    configureVariants = selection.variantSelections.map((v) => ({
-      shopifyVariantGid: v.shopifyVariantGid,
-      title: v.shopifyVariantGid,
-      sku: null,
-      shopifyPrice: "—",
-      ethosPrice: v.ethosPrice?.toString() ?? null,
-      selected: v.selected,
-    }));
+    const mockProduct = findMockCatalogProduct(shopifyProductGid);
+    if (mockProduct) {
+      configureVariants = mockProduct.variants.map((v) =>
+        rowFromSources(v.id, {
+          title: v.title,
+          sku: v.sku,
+          shopifyPrice: v.unitCost,
+        }),
+      );
+    } else {
+      configureVariants = selection.variantSelections.map((v) => {
+        const mockVariant = findMockCatalogVariant(v.shopifyVariantGid);
+        return rowFromSources(v.shopifyVariantGid, {
+          title: mockVariant?.title ?? v.shopifyVariantGid,
+          sku: mockVariant?.sku ?? null,
+          shopifyPrice: mockVariant?.unitCost ?? "—",
+        });
+      });
+    }
   }
 
   const attachments = await listProductAttachments(ctx.shopDomain, shopifyProductGid);
@@ -116,11 +226,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     title: live?.title ?? mock?.title ?? shopifyProductGid,
     imageUrl: live?.imageUrl ?? mock?.imageUrl ?? null,
     offerCustomization: selection.offerCustomization,
+    offerQuantityDiscounts: selection.offerQuantityDiscounts,
+    customizationTypeIds: parseCustomizationTypeIds(selection.customizationTypeIds),
     attachments: attachments.map(toClientProductAttachment),
     s3Configured: isMerchantS3Configured() || ctx.mode === "preview",
     categories: ATTACHMENT_CATEGORIES,
     maxBytes: MAX_ATTACHMENT_BYTES,
     variants: configureVariants,
+    quantityBreakTiers,
+    shopQuantityBreakTiers,
+    useCustomQuantityBreaks,
   };
 };
 
@@ -376,11 +491,81 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return Response.json({ ok: true, offerCustomization });
   }
 
+  if (intent === "save-quantity-discounts") {
+    const raw = String(form.get("offerQuantityDiscounts") ?? "").trim().toLowerCase();
+    const offerQuantityDiscounts = raw === "yes" || raw === "true" || raw === "1";
+    await prisma.productSelection.update({
+      where: { id: selection.id },
+      data: { offerQuantityDiscounts },
+    });
+    return Response.json({ ok: true, offerQuantityDiscounts });
+  }
+
+  if (intent === "save-quantity-break-mode") {
+    const useCustomQuantityBreaks = String(form.get("useCustomQuantityBreaks") ?? "") === "yes";
+    await prisma.productSelection.update({
+      where: { id: selection.id },
+      data: { useCustomQuantityBreaks },
+    });
+    return Response.json({ ok: true, useCustomQuantityBreaks });
+  }
+
+  if (intent === "save-customization-types") {
+    const raw = String(form.get("customizationTypeIds") ?? "[]");
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw) as unknown;
+    } catch {
+      return Response.json({ ok: false, error: "Invalid customization types" }, { status: 400 });
+    }
+    const customizationTypeIds = parseCustomizationTypeIds(parsed);
+    await prisma.productSelection.update({
+      where: { id: selection.id },
+      data: { customizationTypeIds },
+    });
+    return Response.json({ ok: true, customizationTypeIds });
+  }
+
+  if (intent === "save-customization-settings") {
+    const rawOffer = String(form.get("offerCustomization") ?? "").trim().toLowerCase();
+    const offerCustomization =
+      rawOffer === "yes" || rawOffer === "true" || rawOffer === "1";
+    const rawTypes = String(form.get("customizationTypeIds") ?? "[]");
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawTypes) as unknown;
+    } catch {
+      return Response.json({ ok: false, error: "Invalid customization types" }, { status: 400 });
+    }
+    const customizationTypeIds = parseCustomizationTypeIds(parsed);
+    if (offerCustomization && customizationTypeIds.length === 0) {
+      return Response.json(
+        { ok: false, error: "Select at least one customization type." },
+        { status: 400 },
+      );
+    }
+    await prisma.productSelection.update({
+      where: { id: selection.id },
+      data: { offerCustomization, customizationTypeIds },
+    });
+    return Response.json({ ok: true, offerCustomization, customizationTypeIds });
+  }
+
   if (intent === "save-pricing") {
     const raw = String(form.get("variantPricing") ?? "");
-    let rows: Array<{ shopifyVariantGid: string; ethosPrice: string; selected: boolean }>;
+    let rows: Array<{
+      shopifyVariantGid: string;
+      ethosPrice: string;
+      selected: boolean;
+      quantityTierPrices?: string[];
+    }>;
     try {
-      rows = JSON.parse(raw) as Array<{ shopifyVariantGid: string; ethosPrice: string; selected: boolean }>;
+      rows = JSON.parse(raw) as Array<{
+        shopifyVariantGid: string;
+        ethosPrice: string;
+        selected: boolean;
+        quantityTierPrices?: string[];
+      }>;
     } catch {
       return Response.json({ ok: false, error: "Invalid pricing payload" }, { status: 400 });
     }
@@ -388,19 +573,32 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return Response.json({ ok: false, error: "At least one variant is required" }, { status: 400 });
     }
 
+    const shopQuantityBreakTiers = await getShopQuantityBreakTiers(ctx.shopDomain);
+    const quantityBreakTiers = quantityBreakTiersForProduct(
+      selection.useCustomQuantityBreaks,
+      shopQuantityBreakTiers,
+    );
+
     await prisma.variantSelection.deleteMany({ where: { productSelectionId: selection.id } });
 
     const data = rows
       .filter((r) => r.selected)
       .map((r) => {
-        const priceStr = String(r.ethosPrice ?? "").trim();
-        const parsed = priceStr ? Number.parseFloat(priceStr) : NaN;
+        const tierStrings =
+          r.quantityTierPrices?.length === quantityBreakTiers.length
+            ? r.quantityTierPrices
+            : emptyQuantityTierPriceStrings(quantityBreakTiers);
+        const primary =
+          primaryEthosPriceFromTierStrings(tierStrings, quantityBreakTiers) ||
+          String(r.ethosPrice ?? "").trim();
+        const parsed = primary ? Number.parseFloat(primary) : NaN;
         return {
           productSelectionId: selection.id,
           shopifyVariantGid: r.shopifyVariantGid,
           selected: true,
           ethosPrice:
             Number.isFinite(parsed) && parsed > 0 ? new Decimal(parsed.toFixed(2)) : null,
+          ethosQuantityPricing: quantityTierStringsToJson(tierStrings, quantityBreakTiers),
         };
       });
 
@@ -463,17 +661,6 @@ function pendingFilePreviewKind(file: File): "image" | "pdf" | "document" {
   return "document";
 }
 
-function formatEthosShopifyMargin(shopifyPrice: string, ethosPrice: string | null): string {
-  const shopify = parseMoney(shopifyPrice);
-  const ethos = parseMoney(ethosPrice);
-  if (shopify == null || ethos == null) return "—";
-  const dollars = ethos - shopify;
-  const pct = ethos !== 0 ? (dollars / ethos) * 100 : null;
-  const sign = dollars >= 0 ? "+" : "";
-  if (pct == null) return `${sign}${formatUsd(dollars)}`;
-  return `${sign}${formatUsd(dollars)} · ${pct.toFixed(1)}%`;
-}
-
 export default function ConfigureSelectedProductPage() {
   const data = useLoaderData<typeof loader>();
   return <ConfigureSelectedProductPageInner key={data.shopifyProductGid} {...data} />;
@@ -483,14 +670,33 @@ function ConfigureSelectedProductPageInner({
   title,
   imageUrl,
   offerCustomization: loaderOfferCustomization,
+  offerQuantityDiscounts: loaderOfferQuantityDiscounts,
+  customizationTypeIds: loaderCustomizationTypeIds,
   attachments: loaderAttachments,
   s3Configured,
   maxBytes,
   variants: loaderVariants,
+  quantityBreakTiers: loaderQuantityBreakTiers,
+  shopQuantityBreakTiers,
+  useCustomQuantityBreaks: loaderUseCustomQuantityBreaks,
 }: Awaited<ReturnType<typeof loader>>) {
   const deleteFetcher = useFetcher();
   const customizationFetcher = useRouteActionFetcher<
     { ok: true; offerCustomization: boolean } | { ok: false; error: string }
+  >();
+  const quantityDiscountsFetcher = useRouteActionFetcher<
+    { ok: true; offerQuantityDiscounts: boolean } | { ok: false; error: string }
+  >();
+  const quantityBreakModeFetcher = useRouteActionFetcher<
+    { ok: true; useCustomQuantityBreaks: boolean } | { ok: false; error: string }
+  >();
+  const customizationTypesFetcher = useRouteActionFetcher<
+    | {
+        ok: true;
+        customizationTypeIds: ProductCustomizationTypeId[];
+        offerCustomization?: boolean;
+      }
+    | { ok: false; error: string }
   >();
   const actionFetcher = useRouteActionFetcher<
     | { ok: true; attachment: ClientProductAttachment }
@@ -509,10 +715,34 @@ function ConfigureSelectedProductPageInner({
   const [extraAttachments, setExtraAttachments] = useState<ClientProductAttachment[]>([]);
   const [removedIds, setRemovedIds] = useState<Set<string>>(() => new Set());
   const [variantRows, setVariantRows] = useState(loaderVariants);
+  const [useCustomQuantityBreaks, setUseCustomQuantityBreaks] = useState(
+    loaderUseCustomQuantityBreaks,
+  );
+  const quantityBreakTiers = useMemo(
+    () => quantityBreakTiersForProduct(useCustomQuantityBreaks, shopQuantityBreakTiers),
+    [useCustomQuantityBreaks, shopQuantityBreakTiers],
+  );
+  const [tierGoalMarginPercents, setTierGoalMarginPercents] = useState(() =>
+    defaultGoalMarginPercentsForTierCount(loaderQuantityBreakTiers.length),
+  );
+  const skipInitialSuggestedApply = useRef(
+    loaderVariants.some((v) =>
+      v.quantityTierPrices.some((p) => String(p ?? "").trim() !== ""),
+    ),
+  );
+  const [useSuggestedQuantityPricing, setUseSuggestedQuantityPricing] = useState(true);
   const [pricingSaved, setPricingSaved] = useState<string | null>(null);
   const [pricingError, setPricingError] = useState<string | null>(null);
+  const [customizationError, setCustomizationError] = useState<string | null>(null);
   const [dropActive, setDropActive] = useState(false);
   const [offerCustomization, setOfferCustomization] = useState(loaderOfferCustomization);
+  const [offerQuantityDiscounts, setOfferQuantityDiscounts] = useState(
+    loaderOfferQuantityDiscounts,
+  );
+  const [customizationTypeIds, setCustomizationTypeIds] = useState(loaderCustomizationTypeIds);
+  const [savedCustomizationTypeIds, setSavedCustomizationTypeIds] = useState(
+    loaderCustomizationTypeIds,
+  );
   const [attachmentPreviewById, setAttachmentPreviewById] = useState<Record<string, string>>(
     {},
   );
@@ -520,13 +750,74 @@ function ConfigureSelectedProductPageInner({
   const setOfferCustomizationChoice = useCallback(
     (enabled: boolean) => {
       setOfferCustomization(enabled);
+      if (!enabled) {
+        setCustomizationTypeIds([]);
+        setSavedCustomizationTypeIds([]);
+      }
       const fd = new FormData();
       fd.set("intent", "save-customization");
       fd.set("offerCustomization", enabled ? "yes" : "no");
       void customizationFetcher.submit(fd);
+      if (!enabled) {
+        const typesFd = new FormData();
+        typesFd.set("intent", "save-customization-types");
+        typesFd.set("customizationTypeIds", "[]");
+        void customizationTypesFetcher.submit(typesFd);
+      }
     },
-    [customizationFetcher],
+    [customizationFetcher, customizationTypesFetcher],
   );
+
+  const setOfferQuantityDiscountsChoice = useCallback(
+    (enabled: boolean) => {
+      setOfferQuantityDiscounts(enabled);
+      const fd = new FormData();
+      fd.set("intent", "save-quantity-discounts");
+      fd.set("offerQuantityDiscounts", enabled ? "yes" : "no");
+      void quantityDiscountsFetcher.submit(fd);
+    },
+    [quantityDiscountsFetcher],
+  );
+
+  const toggleCustomizationType = useCallback((typeId: ProductCustomizationTypeId) => {
+    setCustomizationError(null);
+    setCustomizationTypeIds((prev) =>
+      prev.includes(typeId) ? prev.filter((id) => id !== typeId) : [...prev, typeId],
+    );
+  }, []);
+
+  const customizationTypesDirty = useMemo(
+    () => !customizationTypeIdsEqual(customizationTypeIds, savedCustomizationTypeIds),
+    [customizationTypeIds, savedCustomizationTypeIds],
+  );
+
+  const customizationSaveButtonLabel = customizationTypesFetcher.isSubmitting
+    ? "Saving…"
+    : !customizationTypesDirty && customizationTypeIds.length > 0
+      ? "Saved"
+      : "Save Customization";
+
+  const saveCustomization = useCallback(async () => {
+    if (!hasRequiredCustomizationTypes(offerCustomization, customizationTypeIds)) {
+      setCustomizationError("Select at least one customization type.");
+      return;
+    }
+    setCustomizationError(null);
+    const fd = new FormData();
+    fd.set("intent", "save-customization-settings");
+    fd.set("offerCustomization", offerCustomization ? "yes" : "no");
+    fd.set("customizationTypeIds", JSON.stringify(customizationTypeIds));
+    try {
+      const data = await customizationTypesFetcher.submit(fd);
+      setSavedCustomizationTypeIds(parseCustomizationTypeIds(data.customizationTypeIds));
+      setCustomizationError(null);
+    } catch (err) {
+      setCustomizationError(err instanceof Error ? err.message : "Could not save customization.");
+    }
+  }, [offerCustomization, customizationTypeIds, customizationTypesFetcher]);
+
+  const customizationTypesMissing =
+    offerCustomization && !hasRequiredCustomizationTypes(true, customizationTypeIds);
 
   useEffect(() => {
     return () => {
@@ -550,23 +841,241 @@ function ConfigureSelectedProductPageInner({
 
   const pendingPreviewKind = pendingFile ? pendingFilePreviewKind(pendingFile) : null;
 
-  const hasAnyVariantPrice = variantRows.some(
-    (r) => r.ethosPrice != null && String(r.ethosPrice).trim() !== "",
+  const hasAnyVariantPrice = variantRows.some((r) => {
+    if (!r.selected) return false;
+    if (offerQuantityDiscounts) {
+      return r.quantityTierPrices.some((p) => String(p ?? "").trim() !== "");
+    }
+    return r.ethosPrice != null && String(r.ethosPrice).trim() !== "";
+  });
+
+  const allSelectedShareSameEthosPrice = useMemo(
+    () => selectedVariantsShareSameEthosPrice(variantRows),
+    [variantRows],
+  );
+
+  useEffect(() => {
+    if (allSelectedShareSameEthosPrice && samePriceForAll) {
+      setSamePriceForAll(false);
+    }
+  }, [allSelectedShareSameEthosPrice, samePriceForAll]);
+
+  const samePriceForAllControl =
+    hasAnyVariantPrice && !allSelectedShareSameEthosPrice ? (
+    <label className={styles.samePriceOptionHeader}>
+      <input
+        type="checkbox"
+        checked={samePriceForAll}
+        onChange={(e) => {
+          const enabled = e.target.checked;
+          setSamePriceForAll(enabled);
+          if (enabled) {
+            const template = variantRows.find((r) => {
+              if (!r.selected) return false;
+              if (offerQuantityDiscounts) {
+                return r.quantityTierPrices.some((p) => String(p ?? "").trim() !== "");
+              }
+              return r.ethosPrice != null && String(r.ethosPrice).trim() !== "";
+            });
+            if (template) {
+              setVariantRows((prev) =>
+                prev.map((r) =>
+                  r.selected
+                    ? applyPricingToRow(
+                        r,
+                        template.ethosPrice ?? "",
+                        [...template.quantityTierPrices],
+                      )
+                    : r,
+                ),
+              );
+            }
+          }
+        }}
+      />
+      Same for all selected variants
+    </label>
+  ) : null;
+
+  const applyPricingToRow = useCallback(
+    (row: ConfigureVariantRow, ethosPrice: string, quantityTierPrices: string[]): ConfigureVariantRow => ({
+      ...row,
+      ethosPrice,
+      quantityTierPrices,
+    }),
+    [],
+  );
+
+  const applySuggestedPricingToVariants = useCallback(
+    (goalMargins: number[]) => {
+      setVariantRows((prev) =>
+        prev.map((r) => {
+          if (!r.selected) return r;
+          const tiers = suggestedTierPricesForVariant(r.shopifyPrice, goalMargins);
+          const ethosPrice =
+            primaryEthosPriceFromTierStrings(tiers, quantityBreakTiers) || tiers[0] || "";
+          return applyPricingToRow(r, ethosPrice, tiers);
+        }),
+      );
+    },
+    [applyPricingToRow, quantityBreakTiers],
+  );
+
+  const setGoalMarginsAndApplyPrices = useCallback(
+    (next: number[]) => {
+      setTierGoalMarginPercents(next);
+      if (offerQuantityDiscounts) {
+        applySuggestedPricingToVariants(next);
+      }
+    },
+    [offerQuantityDiscounts, applySuggestedPricingToVariants],
+  );
+
+  const setQuantityBreakModeChoice = useCallback(
+    (custom: boolean) => {
+      if (custom === useCustomQuantityBreaks) return;
+      const fromTiers = quantityBreakTiersForProduct(useCustomQuantityBreaks, shopQuantityBreakTiers);
+      const toTiers = quantityBreakTiersForProduct(custom, shopQuantityBreakTiers);
+      setUseCustomQuantityBreaks(custom);
+      setVariantRows((prev) =>
+        prev.map((r) => {
+          const tiers = remapQuantityTierPriceStrings(r.quantityTierPrices, fromTiers, toTiers);
+          const ethosPrice =
+            primaryEthosPriceFromTierStrings(tiers, toTiers) || r.ethosPrice || "";
+          return applyPricingToRow(r, ethosPrice, tiers);
+        }),
+      );
+      setTierGoalMarginPercents(defaultGoalMarginPercentsForTierCount(toTiers.length));
+      const fd = new FormData();
+      fd.set("intent", "save-quantity-break-mode");
+      fd.set("useCustomQuantityBreaks", custom ? "yes" : "no");
+      void quantityBreakModeFetcher.submit(fd);
+    },
+    [
+      useCustomQuantityBreaks,
+      shopQuantityBreakTiers,
+      applyPricingToRow,
+      quantityBreakModeFetcher,
+    ],
   );
 
   const updateVariantPrice = useCallback(
     (shopifyVariantGid: string, ethosPrice: string) => {
       setVariantRows((prev) => {
+        const apply = (r: ConfigureVariantRow) => {
+          const tiers = [...r.quantityTierPrices];
+          tiers[0] = ethosPrice;
+          return applyPricingToRow(r, ethosPrice, tiers);
+        };
         if (samePriceForAll) {
-          return prev.map((r) => (r.selected ? { ...r, ethosPrice } : r));
+          return prev.map((r) => (r.selected ? apply(r) : r));
         }
-        return prev.map((r) =>
-          r.shopifyVariantGid === shopifyVariantGid ? { ...r, ethosPrice } : r,
-        );
+        return prev.map((r) => (r.shopifyVariantGid === shopifyVariantGid ? apply(r) : r));
       });
     },
-    [samePriceForAll],
+    [applyPricingToRow, samePriceForAll],
   );
+
+  const updateQuantityTierPrice = useCallback(
+    (shopifyVariantGid: string, tierIndex: number, price: string) => {
+      setVariantRows((prev) => {
+        const apply = (r: ConfigureVariantRow) => {
+          const tiers = [...r.quantityTierPrices];
+          tiers[tierIndex] = price;
+          const ethosPrice =
+            tierIndex === 0 ? price : primaryEthosPriceFromTierStrings(tiers) || r.ethosPrice;
+          return applyPricingToRow(r, ethosPrice ?? "", tiers);
+        };
+        if (samePriceForAll) {
+          return prev.map((r) => (r.selected ? apply(r) : r));
+        }
+        return prev.map((r) => (r.shopifyVariantGid === shopifyVariantGid ? apply(r) : r));
+      });
+    },
+    [applyPricingToRow, samePriceForAll],
+  );
+
+  const [tierApplyOffer, setTierApplyOffer] = useState<{ tierIndex: number; price: string } | null>(
+    null,
+  );
+
+  const handleQuantityTierCellChange = useCallback(
+    (shopifyVariantGid: string, tierIndex: number, price: string) => {
+      updateQuantityTierPrice(shopifyVariantGid, tierIndex, price);
+      const trimmed = price.trim();
+      if (trimmed) {
+        setTierApplyOffer({ tierIndex, price: trimmed });
+      } else {
+        setTierApplyOffer((prev) => (prev?.tierIndex === tierIndex ? null : prev));
+      }
+    },
+    [updateQuantityTierPrice],
+  );
+
+  const applyTierPriceToAllSelectedVariants = useCallback(() => {
+    if (!tierApplyOffer) return;
+    const { tierIndex, price } = tierApplyOffer;
+    setVariantRows((prev) =>
+      prev.map((r) => {
+        if (!r.selected) return r;
+        const tiers = [...r.quantityTierPrices];
+        tiers[tierIndex] = price;
+        const ethosPrice =
+          tierIndex === 0
+            ? price
+            : primaryEthosPriceFromTierStrings(tiers) || r.ethosPrice || "";
+        return applyPricingToRow(r, ethosPrice, tiers);
+      }),
+    );
+    setTierApplyOffer(null);
+  }, [tierApplyOffer, applyPricingToRow]);
+
+  useEffect(() => {
+    setTierGoalMarginPercents((prev) => {
+      if (prev.length === quantityBreakTiers.length) return prev;
+      return defaultGoalMarginPercentsForTierCount(quantityBreakTiers.length);
+    });
+  }, [quantityBreakTiers.length]);
+
+  const selectedVariantKey = useMemo(
+    () =>
+      variantRows
+        .filter((r) => r.selected)
+        .map((r) => r.shopifyVariantGid)
+        .join("|"),
+    [variantRows],
+  );
+
+  useEffect(() => {
+    if (!offerQuantityDiscounts || !useSuggestedQuantityPricing) return;
+    if (skipInitialSuggestedApply.current) {
+      skipInitialSuggestedApply.current = false;
+      return;
+    }
+    applySuggestedPricingToVariants(tierGoalMarginPercents);
+  }, [
+    offerQuantityDiscounts,
+    useSuggestedQuantityPricing,
+    tierGoalMarginPercents,
+    applySuggestedPricingToVariants,
+    selectedVariantKey,
+  ]);
+
+  const showSameForAllRow = useMemo(() => {
+    if (useSuggestedQuantityPricing) return false;
+    if (tierApplyOffer) return true;
+    const selected = variantRows.filter((r) => r.selected);
+    if (selected.length <= 1) return false;
+    for (let tierIndex = 0; tierIndex < quantityBreakTiers.length; tierIndex++) {
+      const prices = selected.map((r) => String(r.quantityTierPrices[tierIndex] ?? "").trim());
+      const filled = prices.filter((p) => p !== "");
+      if (filled.length === 0) continue;
+      const allFilled = filled.length === selected.length;
+      const allMatch = filled.every((p) => p === filled[0]);
+      if (!allFilled || !allMatch) return true;
+    }
+    return false;
+  }, [variantRows, quantityBreakTiers, tierApplyOffer, useSuggestedQuantityPricing]);
 
   const attachments = useMemo(() => {
     const fromLoader = loaderAttachments.filter((a) => !removedIds.has(a.id));
@@ -639,6 +1148,7 @@ function ConfigureSelectedProductPageInner({
     const payload = variantRows.map((v) => ({
       shopifyVariantGid: v.shopifyVariantGid,
       ethosPrice: v.ethosPrice ?? "",
+      quantityTierPrices: v.quantityTierPrices,
       selected: v.selected,
     }));
     const fd = new FormData();
@@ -704,37 +1214,16 @@ function ConfigureSelectedProductPageInner({
                   <tr>
                     <th scope="col">Include</th>
                     <th scope="col">Variant</th>
-                    <th scope="col">Shopify Price</th>
-                    <th scope="col" className={styles.ethosPriceHeader}>
-                      <span>Ethos Price (USD)</span>
-                      {hasAnyVariantPrice ? (
-                        <label className={styles.samePriceOptionHeader}>
-                          <input
-                            type="checkbox"
-                            checked={samePriceForAll}
-                            onChange={(e) => {
-                              const enabled = e.target.checked;
-                              setSamePriceForAll(enabled);
-                              if (enabled) {
-                                const source = variantRows.find(
-                                  (r) =>
-                                    r.ethosPrice != null && String(r.ethosPrice).trim() !== "",
-                                )?.ethosPrice;
-                                if (source) {
-                                  setVariantRows((prev) =>
-                                    prev.map((r) =>
-                                      r.selected ? { ...r, ethosPrice: source } : r,
-                                    ),
-                                  );
-                                }
-                              }
-                            }}
-                          />
-                          Same for all selected variants
-                        </label>
-                      ) : null}
-                    </th>
-                    <th scope="col">Margin</th>
+                    <th scope="col">Shopify Cost</th>
+                    {!offerQuantityDiscounts ? (
+                      <>
+                        <th scope="col" className={styles.ethosPriceHeader}>
+                          <span>Price</span>
+                          {samePriceForAllControl}
+                        </th>
+                        <th scope="col">Margin</th>
+                      </>
+                    ) : null}
                   </tr>
                 </thead>
                 <tbody>
@@ -762,51 +1251,279 @@ function ConfigureSelectedProductPageInner({
                         ) : null}
                       </td>
                       <td>{formatShopifyPriceDisplay(row.shopifyPrice)}</td>
-                      <td>
-                        <div className={styles.priceInputWrap}>
-                          <span className={styles.priceInputPrefix} aria-hidden>
-                            $
-                          </span>
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            value={row.ethosPrice ?? ""}
-                            disabled={!row.selected}
-                            onChange={(e) =>
-                              updateVariantPrice(row.shopifyVariantGid, e.target.value)
-                            }
-                            className={styles.priceInputField}
-                            aria-label={`Ethos price for ${row.title}`}
-                          />
-                        </div>
-                      </td>
-                      <td className={styles.marginCell}>
-                        {formatEthosShopifyMargin(row.shopifyPrice, row.ethosPrice)}
-                      </td>
+                      {!offerQuantityDiscounts ? (
+                        <>
+                          <td>
+                            <div className={styles.priceInputWrap}>
+                              <span className={styles.priceInputPrefix} aria-hidden>
+                                $
+                              </span>
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={row.ethosPrice ?? ""}
+                                disabled={!row.selected}
+                                onChange={(e) =>
+                                  updateVariantPrice(row.shopifyVariantGid, e.target.value)
+                                }
+                                className={styles.priceInputField}
+                                aria-label={`Price for ${row.title}`}
+                              />
+                            </div>
+                          </td>
+                          <td className={styles.marginCell}>
+                            <VariantTableMargin
+                              shopifyUnitCost={row.shopifyPrice}
+                              ethosPrice={row.ethosPrice}
+                            />
+                          </td>
+                        </>
+                      ) : null}
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            <div className={styles.configureActionRow}>
-              <s-stack direction="inline" gap="base">
-                <s-button
-                  type="button"
-                  variant="primary"
-                  disabled={pricingFetcher.isSubmitting}
-                  onClick={() => void savePricing()}
-                >
-                  {pricingFetcher.isSubmitting ? "Saving…" : "Save Pricing"}
-                </s-button>
-                {pricingSaved ? (
-                  <span style={{ color: "#15803d", fontSize: "13px" }}>{pricingSaved}</span>
-                ) : null}
-                {pricingError ? (
-                  <span style={{ color: "#b91c1c", fontSize: "13px" }}>{pricingError}</span>
-                ) : null}
-              </s-stack>
             </div>
+
+            <div className={styles.configureQuantityBelow}>
+              <div className={styles.quantityPricingPanel}>
+                <fieldset className={styles.yesNoFieldset}>
+                  <legend className={styles.formFieldLabel}>Offer Quantity Discounts</legend>
+                  <div
+                    className={styles.yesNoOptions}
+                    role="radiogroup"
+                    aria-label="Offer Quantity Discounts"
+                  >
+                    <label className={styles.yesNoOption}>
+                      <input
+                        type="radio"
+                        name="offerQuantityDiscounts"
+                        checked={offerQuantityDiscounts}
+                        onChange={() => setOfferQuantityDiscountsChoice(true)}
+                      />
+                      Yes
+                    </label>
+                    <label className={styles.yesNoOption}>
+                      <input
+                        type="radio"
+                        name="offerQuantityDiscounts"
+                        checked={!offerQuantityDiscounts}
+                        onChange={() => setOfferQuantityDiscountsChoice(false)}
+                      />
+                      No
+                    </label>
+                  </div>
+                </fieldset>
+                {!offerQuantityDiscounts ? null : variantRows.filter((r) => r.selected).length === 0 ? (
+                  <p className={styles.quantityPricingEmpty}>
+                    Select at least one variant above to set quantity pricing.
+                  </p>
+                ) : (
+                  <>
+                    <fieldset className={styles.quantityBreakModeFieldset}>
+                      <legend className={styles.formFieldLabel}>Quantity Break Columns</legend>
+                      <div
+                        className={styles.yesNoOptions}
+                        role="radiogroup"
+                        aria-label="Quantity Break Columns"
+                      >
+                        <label className={styles.yesNoOption}>
+                          <input
+                            type="radio"
+                            name="quantityBreakMode"
+                            checked={!useCustomQuantityBreaks}
+                            onChange={() => setQuantityBreakModeChoice(false)}
+                          />
+                          Use Suggested Tiers
+                        </label>
+                        <label className={styles.yesNoOption}>
+                          <input
+                            type="radio"
+                            name="quantityBreakMode"
+                            checked={useCustomQuantityBreaks}
+                            onChange={() => setQuantityBreakModeChoice(true)}
+                          />
+                          Use Custom Tiers
+                        </label>
+                      </div>
+                      <p className={styles.quantityBreakModeHint}>
+                        {useCustomQuantityBreaks ? (
+                          <>
+                            Uses your quantity breaks from{" "}
+                            <Link to="/app/settings?section=quantity-tiers">Settings</Link>.
+                          </>
+                        ) : (
+                          <>Use Ethos standard range or choose your own.</>
+                        )}
+                      </p>
+                    </fieldset>
+                    <label className={styles.useSuggestedPricingOption}>
+                      <input
+                        type="checkbox"
+                        checked={useSuggestedQuantityPricing}
+                        onChange={(e) => setUseSuggestedQuantityPricing(e.target.checked)}
+                      />
+                      Use Suggested Pricing
+                    </label>
+                    <div className={`${styles.tableWrapScroll} ${styles.spreadsheetWrap}`}>
+                      <table className={styles.quantityDiscountTable}>
+                        <thead>
+                          <tr>
+                            <th scope="col" className={styles.quantityDiscountVariantCol}>
+                              Variant
+                            </th>
+                            {quantityBreakTiers.map((tier) => (
+                              <th key={tier.label} scope="col" className={styles.quantityTierHeader}>
+                                {tier.label}
+                              </th>
+                            ))}
+                          </tr>
+                          <tr className={styles.quantityGoalMarginRow}>
+                            <th
+                              scope="row"
+                              className={`${styles.quantityDiscountVariantCol} ${styles.quantityGoalMarginHeading}`}
+                            >
+                              Goal Margin
+                            </th>
+                            {quantityBreakTiers.map((tier, tierIndex) => (
+                              <th
+                                key={`goal-${tier.minQty}-${tier.maxQty}`}
+                                scope="col"
+                                className={styles.quantityGoalMarginCell}
+                              >
+                                <div className={styles.goalMarginInputWrap}>
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    max={99.9}
+                                    step={0.1}
+                                    inputMode="decimal"
+                                    className={styles.goalMarginInput}
+                                    value={tierGoalMarginPercents[tierIndex] ?? ""}
+                                    onChange={(e) => {
+                                      const n = Number(e.target.value);
+                                      if (!Number.isFinite(n)) return;
+                                      setTierGoalMarginPercents((prev) => {
+                                        const next = [...prev];
+                                        next[tierIndex] = n;
+                                        return next;
+                                      });
+                                    }}
+                                    onBlur={(e) => {
+                                      const parsed = parseGoalMarginPercentInput(e.target.value);
+                                      if (parsed == null) return;
+                                      const next = [...tierGoalMarginPercents];
+                                      next[tierIndex] = parsed;
+                                      setGoalMarginsAndApplyPrices(next);
+                                    }}
+                                    aria-label={`Goal Margin for ${tier.label}`}
+                                  />
+                                  <span className={styles.goalMarginSuffix} aria-hidden>
+                                    %
+                                  </span>
+                                </div>
+                              </th>
+                            ))}
+                          </tr>
+                          {showSameForAllRow ? (
+                            <tr className={styles.quantitySameForAllRow}>
+                              <th
+                                scope="row"
+                                className={`${styles.quantityDiscountVariantCol} ${styles.quantitySameForAllHeading}`}
+                              >
+                                Same For All
+                              </th>
+                              {quantityBreakTiers.map((tier, tierIndex) => (
+                                <th
+                                  key={`same-for-all-${tier.minQty}-${tier.maxQty}`}
+                                  scope="col"
+                                  className={styles.quantityTierSameForAllCell}
+                                >
+                                  {tierApplyOffer?.tierIndex === tierIndex ? (
+                                    <button
+                                      type="button"
+                                      className={styles.tierApplyHeaderButton}
+                                      onClick={applyTierPriceToAllSelectedVariants}
+                                    >
+                                      Apply to all variants
+                                    </button>
+                                  ) : null}
+                                </th>
+                              ))}
+                            </tr>
+                          ) : null}
+                        </thead>
+                        <tbody>
+                          {variantRows
+                            .filter((r) => r.selected)
+                            .map((row) => (
+                              <tr key={`qty-${row.shopifyVariantGid}`}>
+                                <td className={styles.quantityDiscountVariantCol}>
+                                  <div className={styles.quantityVariantName}>{row.title}</div>
+                                  {row.sku ? (
+                                    <div className={styles.quantityVariantSku}>SKU {row.sku}</div>
+                                  ) : null}
+                                  <div className={styles.quantityVariantCost}>
+                                    Cost price {formatShopifyPriceDisplay(row.shopifyPrice)}
+                                  </div>
+                                </td>
+                                {quantityBreakTiers.map((tier, tierIndex) => (
+                                  <td key={tier.label} className={styles.spreadsheetCell}>
+                                    <div className={styles.spreadsheetCellInner}>
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        step="0.01"
+                                        inputMode="decimal"
+                                        value={row.quantityTierPrices[tierIndex] ?? ""}
+                                        disabled={useSuggestedQuantityPricing}
+                                        onChange={(e) =>
+                                          handleQuantityTierCellChange(
+                                            row.shopifyVariantGid,
+                                            tierIndex,
+                                            e.target.value,
+                                          )
+                                        }
+                                        className={styles.spreadsheetCellInput}
+                                        aria-label={`${tier.label} for ${row.title}`}
+                                        placeholder="0.00"
+                                      />
+                                      <SpreadsheetTierMargin
+                                        shopifyUnitCost={row.shopifyPrice}
+                                        tierPrice={row.quantityTierPrices[tierIndex] ?? null}
+                                      />
+                                    </div>
+                                  </td>
+                                ))}
+                              </tr>
+                            ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <div className={styles.configureActionRow}>
+                <s-stack direction="inline" gap="base">
+                  <s-button
+                    type="button"
+                    variant="primary"
+                    disabled={pricingFetcher.isSubmitting}
+                    onClick={() => void savePricing()}
+                  >
+                    {pricingFetcher.isSubmitting ? "Saving…" : "Save Pricing"}
+                  </s-button>
+                  {pricingSaved ? (
+                    <span style={{ color: "#15803d", fontSize: "13px" }}>{pricingSaved}</span>
+                  ) : null}
+                  {pricingError ? (
+                    <span style={{ color: "#b91c1c", fontSize: "13px" }}>{pricingError}</span>
+                  ) : null}
+                </s-stack>
+              </div>
             </div>
           </div>
         )}
@@ -817,9 +1534,7 @@ function ConfigureSelectedProductPageInner({
           <span className={styles.workflowStepNumber} aria-hidden>
             2
           </span>
-          <div className={styles.sectionStepHeadingText}>
-            <h2 className={styles.sectionTitleConfigure}>Upload Design File</h2>
-          </div>
+          <h2 className={styles.sectionTitleConfigure}>Customization</h2>
         </div>
         <fieldset className={styles.yesNoFieldset}>
           <legend className={styles.formFieldLabel}>Offer Customization on this product</legend>
@@ -844,6 +1559,121 @@ function ConfigureSelectedProductPageInner({
             </label>
           </div>
         </fieldset>
+        {offerCustomization ? (
+          <div
+            className={`${styles.customizationTypePanel} ${
+              customizationTypesMissing ? styles.customizationTypePanelInvalid : ""
+            }`}
+          >
+            <fieldset className={styles.customizationTypeFieldset}>
+              <legend className={styles.customizationTypeLegend}>
+                Customization Type{" "}
+                <span className={styles.requiredMark} aria-hidden>
+                  *
+                </span>
+              </legend>
+              <p className={styles.customizationTypeSubtext}>{CUSTOMIZATION_TYPE_SELECTION_INTRO}</p>
+              {customizationTypesMissing ? (
+                <p className={styles.formError} role="alert">
+                  Select at least one customization type.
+                </p>
+              ) : null}
+              <div className={styles.customizationTypeGrid}>
+                {PRODUCT_CUSTOMIZATION_TYPES.map((type) => (
+                  <div key={type.id} className={styles.customizationTypeCard}>
+                    <CustomizationTypeMedia imageSrc={type.imageSrc} label={type.label} />
+                    <span className={styles.customizationTypeLabel}>{type.label}</span>
+                    <span
+                      id={`customization-type-${type.id}-desc`}
+                      className={styles.customizationTypeDescription}
+                    >
+                      <span className={styles.customizationTypeDescriptionMain}>
+                        {type.description}
+                      </span>
+                      {customizationTypeCardInfoLines(type).map((line) => (
+                        <span key={line} className={styles.customizationTypeWorksBest}>
+                          <svg
+                            className={styles.customizationTypeInfoIcon}
+                            width="14"
+                            height="14"
+                            viewBox="0 0 14 14"
+                            aria-hidden
+                          >
+                            <circle
+                              cx="7"
+                              cy="7"
+                              r="6"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="1.25"
+                            />
+                            <path
+                              fill="currentColor"
+                              d="M6.35 6.15h1.3V10H6.35V6.15zm0-2.1h1.3v1.25H6.35V4.05z"
+                            />
+                          </svg>
+                          <em>{line}</em>
+                        </span>
+                      ))}
+                    </span>
+                    <label className={styles.customizationTypeCheckLabel}>
+                      <input
+                        type="checkbox"
+                        className={styles.customizationTypeCardInput}
+                        checked={customizationTypeIds.includes(type.id)}
+                        onChange={() => toggleCustomizationType(type.id)}
+                        aria-label={`Select ${type.label}`}
+                        aria-describedby={`customization-type-${type.id}-desc`}
+                      />
+                      <span className={styles.customizationTypeCardCheck} aria-hidden />
+                    </label>
+                  </div>
+                ))}
+              </div>
+            </fieldset>
+            <ConfigOptionTag
+              tone="warning"
+              multiline
+              id="customization-type-fee-note"
+            >
+              {CUSTOMIZATION_TYPE_FEE_NOTE}
+            </ConfigOptionTag>
+            <div className={styles.configureActionRow}>
+              <s-stack direction="inline" gap="base">
+                <s-button
+                  type="button"
+                  variant={
+                    !customizationTypesDirty && customizationTypeIds.length > 0
+                      ? "secondary"
+                      : "primary"
+                  }
+                  disabled={
+                    customizationTypesFetcher.isSubmitting ||
+                    customizationTypeIds.length === 0 ||
+                    (!customizationTypesDirty && customizationTypeIds.length > 0)
+                  }
+                  onClick={() => void saveCustomization()}
+                >
+                  {customizationSaveButtonLabel}
+                </s-button>
+                {customizationError ? (
+                  <span style={{ color: "#b91c1c", fontSize: "13px" }}>{customizationError}</span>
+                ) : null}
+              </s-stack>
+            </div>
+          </div>
+        ) : null}
+      </s-section>
+
+      <s-section>
+        <div className={styles.sectionStepHeading}>
+          <span className={styles.workflowStepNumber} aria-hidden>
+            3
+          </span>
+          <div className={styles.sectionStepHeadingText}>
+            <h2 className={styles.sectionTitleConfigure}>Upload Design File</h2>
+          </div>
+        </div>
         {!offerCustomization ? (
           <p className={styles.sectionSubtext}>
             Design files are not required for this product.
@@ -937,14 +1767,16 @@ function ConfigureSelectedProductPageInner({
               </div>
             )}
           </div>
-          <s-button
-            type="button"
-            variant="primary"
-            disabled={uploading || actionFetcher.isSubmitting}
-            onClick={() => void runUpload()}
-          >
-            {uploading || actionFetcher.isSubmitting ? "Uploading…" : "Upload File"}
-          </s-button>
+          <div className={styles.uploadFileActions}>
+            <s-button
+              type="button"
+              variant="primary"
+              disabled={uploading || actionFetcher.isSubmitting}
+              onClick={() => void runUpload()}
+            >
+              {uploading || actionFetcher.isSubmitting ? "Uploading…" : "Upload File"}
+            </s-button>
+          </div>
           {uploadError ? (
             <p className={styles.formError}>{uploadError}</p>
           ) : null}

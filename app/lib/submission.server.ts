@@ -6,6 +6,14 @@ import { fetchConfigureVariants } from "./shopify/variants.server";
 import { fetchProductSummariesByGids } from "./shopify/products.server";
 import { getShopSupplierLinkView } from "./shop-supplier.server";
 import { MOCK_CATALOG_PRODUCTS } from "./mock-catalog";
+import {
+  parseFilledQuantityTierStrings,
+  primaryEthosPriceFromTierStrings,
+  quantityTierStringsFromStorage,
+  variantPricingCompleteForProduct,
+} from "./quantity-pricing";
+import { hasRequiredCustomizationTypes } from "./product-customization-types";
+import { getShopQuantityBreakTiers } from "./shop-quantity-tiers.server";
 
 export type SubmitSelectionResult = {
   ok: boolean;
@@ -60,6 +68,8 @@ export async function submitSelectedProducts(ctx: MerchantContext): Promise<Subm
   let skipped = 0;
 
   const mockById = new Map(MOCK_CATALOG_PRODUCTS.map((p) => [p.id, p]));
+  const quantityBreakTiers = await getShopQuantityBreakTiers(ctx.shopDomain);
+  const baseTierLabel = quantityBreakTiers[0]?.label ?? "base tier";
 
   for (const sel of selections) {
     const existingMap = await prisma.shopifyProductMap.findUnique({
@@ -103,12 +113,38 @@ export async function submitSelectedProducts(ctx: MerchantContext): Promise<Subm
     }
 
     const missingPrice = variantRows.filter((v) => {
-      const n = decimalToNumber(v.ethosPrice);
-      return n == null || n <= 0;
+      const tiers = quantityTierStringsFromStorage(
+        v.ethosQuantityPricing,
+        v.ethosPrice?.toString(),
+        quantityBreakTiers,
+      );
+      return !variantPricingCompleteForProduct(
+        tiers,
+        sel.offerQuantityDiscounts,
+        quantityBreakTiers,
+      );
     });
     if (missingPrice.length > 0) {
       failed += 1;
-      const msg = "Set Ethos price on every selected variant before submitting";
+      const msg = sel.offerQuantityDiscounts
+        ? `Set at least the ${baseTierLabel} price on every selected variant before submitting`
+        : "Set Ethos price on every selected variant before submitting";
+      errors.push(`${sel.shopifyProductGid}: ${msg}`);
+      await prisma.submissionLine.create({
+        data: {
+          submissionId: submission.id,
+          shopifyProductGid: sel.shopifyProductGid,
+          shopifyVariantGids: variantRows.map((v) => v.shopifyVariantGid),
+          status: "needs_attention",
+          errorMessage: msg,
+        },
+      });
+      continue;
+    }
+
+    if (!hasRequiredCustomizationTypes(sel.offerCustomization, sel.customizationTypeIds)) {
+      failed += 1;
+      const msg = "Select at least one customization type before submitting";
       errors.push(`${sel.shopifyProductGid}: ${msg}`);
       await prisma.submissionLine.create({
         data: {
@@ -148,7 +184,14 @@ export async function submitSelectedProducts(ctx: MerchantContext): Promise<Subm
       }
     }
 
-    const ethosPrices = variantRows.map((v) => decimalToNumber(v.ethosPrice)!);
+    const ethosPrices = variantRows.map((v) => {
+      const tierStrings = quantityTierStringsFromStorage(
+        v.ethosQuantityPricing,
+        v.ethosPrice?.toString(),
+        quantityBreakTiers,
+      );
+      return Number(primaryEthosPriceFromTierStrings(tierStrings, quantityBreakTiers));
+    });
     const minEthosPrice = Math.min(...ethosPrices);
 
     const payload: EthosImportProductPayload = {
@@ -160,13 +203,23 @@ export async function submitSelectedProducts(ctx: MerchantContext): Promise<Subm
       ethosPrice: minEthosPrice,
       variants: variantRows.map((v) => {
         const meta = variantMeta.get(v.shopifyVariantGid);
+        const tierStrings = quantityTierStringsFromStorage(
+          v.ethosQuantityPricing,
+          v.ethosPrice?.toString(),
+          quantityBreakTiers,
+        );
+        const filledTiers = parseFilledQuantityTierStrings(tierStrings, quantityBreakTiers);
+        const ethosPrice = Number(primaryEthosPriceFromTierStrings(tierStrings, quantityBreakTiers));
         return {
           shopifyVariantGid: v.shopifyVariantGid,
           color: meta?.color ?? "Default",
           size: meta?.size ?? "One Size",
           supplierSku: meta?.sku ?? null,
           quantity: meta?.quantity ?? 0,
-          ethosPrice: decimalToNumber(v.ethosPrice)!,
+          ethosPrice,
+          ...(sel.offerQuantityDiscounts && filledTiers.length > 0
+            ? { quantityTierPricing: filledTiers }
+            : {}),
         };
       }),
       attachments: sel.attachments

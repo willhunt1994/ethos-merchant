@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 300" role="img" aria-label="Printed logos example">
+  <rect width="500" height="300" fill="#eef2f6"/>
+  <rect x="140" y="72" width="220" height="120" rx="8" fill="#ffffff" stroke="#c9cccf"/>
+  <circle cx="200" cy="132" r="28" fill="#005bd3" opacity="0.85"/>
+  <rect x="248" y="108" width="88" height="12" rx="4" fill="#8c9196"/>
+  <rect x="248" y="128" width="64" height="10" rx="4" fill="#b5bcc2"/>
+  <text x="250" y="248" text-anchor="middle" font-family="system-ui,sans-serif" font-size="18" fill="#6d7175">Printed Logos</text>
+</svg>

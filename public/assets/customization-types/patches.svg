@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 300" role="img" aria-label="Patches example">
+  <rect width="500" height="300" fill="#eef0f3"/>
+  <rect x="175" y="78" width="150" height="150" rx="18" fill="#1a2744"/>
+  <circle cx="250" cy="138" r="36" fill="#f6c453"/>
+  <rect x="228" y="168" width="44" height="8" rx="2" fill="#ffffff" opacity="0.9"/>
+  <text x="250" y="248" text-anchor="middle" font-family="system-ui,sans-serif" font-size="18" fill="#6d7175">Patches</text>
+</svg>

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 300" role="img" aria-label="Flat embroidery example">
+  <rect width="500" height="300" fill="#f4f2ef"/>
+  <rect x="120" y="78" width="260" height="132" rx="6" fill="#e8dfd4"/>
+  <path d="M175 150 L225 150 M250 150 L300 150 M190 170 L310 170" stroke="#005bd3" stroke-width="4" stroke-linecap="round"/>
+  <text x="250" y="248" text-anchor="middle" font-family="system-ui,sans-serif" font-size="18" fill="#6d7175">Flat Embroidery</text>
+</svg>

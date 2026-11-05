@@ -1,25 +1,80 @@
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { useLoaderData } from "react-router";
+import { Link, useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import prisma from "../db.server";
 import { EmptyState } from "../components/embedded/empty-state";
+import { PLACEHOLDER_IMAGE } from "../lib/catalog-product";
 import styles from "../styles/embedded-app.module.css";
 import { requireMerchantContext } from "../lib/merchant-auth.server";
+import { MOCK_CATALOG_PRODUCTS } from "../lib/mock-catalog";
 import { fetchProductSummariesByGids } from "../lib/shopify/products.server";
 
-function lineStatusTone(status: string): "success" | "warning" | "critical" | "info" | "neutral" {
-  if (status === "imported") return "success";
-  if (status === "failed") return "critical";
-  if (status === "needs_attention") return "warning";
-  if (status === "processing") return "info";
-  return "neutral";
+type LineStatus = string;
+type BatchStatus = string;
+
+function lineStatusLabel(status: LineStatus): string {
+  switch (status) {
+    case "imported":
+      return "Submitted";
+    case "failed":
+      return "Failed";
+    case "needs_attention":
+      return "Needs Attention";
+    case "processing":
+      return "Processing";
+    case "submitted":
+      return "Submitted";
+    default:
+      return status.replace(/_/g, " ");
+  }
 }
 
-function batchStatusTone(status: string): "success" | "warning" | "critical" | "info" | "neutral" {
-  if (status === "imported") return "success";
-  if (status === "failed") return "critical";
-  if (status === "needs_attention") return "warning";
-  return "info";
+function batchStatusLabel(status: BatchStatus): string {
+  switch (status) {
+    case "imported":
+      return "Complete";
+    case "failed":
+      return "Failed";
+    case "needs_attention":
+      return "Needs Attention";
+    case "processing":
+      return "Processing";
+    case "submitted":
+      return "Submitted";
+    default:
+      return status.replace(/_/g, " ");
+  }
+}
+
+function lineStatusTagClass(status: LineStatus): string {
+  if (status === "imported" || status === "submitted") return styles.attachmentStatusTagSuccess;
+  if (status === "failed") return styles.attachmentStatusTagDanger;
+  if (status === "needs_attention") return styles.attachmentStatusTagWarning;
+  return styles.attachmentStatusTagNeutral;
+}
+
+function batchStatusTagClass(status: BatchStatus): string {
+  if (status === "imported") return styles.attachmentStatusTagSuccess;
+  if (status === "failed") return styles.attachmentStatusTagDanger;
+  if (status === "needs_attention") return styles.attachmentStatusTagWarning;
+  return styles.attachmentStatusTagNeutral;
+}
+
+function formatBatchWhen(iso: string | null, fallbackIso: string): string {
+  const raw = iso ?? fallbackIso;
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(raw));
+}
+
+function batchSummaryLines(lines: { status: string }[]): string {
+  const imported = lines.filter((l) => l.status === "imported").length;
+  const failed = lines.filter((l) => l.status === "failed").length;
+  const parts = [`${lines.length} product(s)`];
+  if (imported > 0) parts.push(`${imported} submitted`);
+  if (failed > 0) parts.push(`${failed} failed`);
+  return parts.join(" · ");
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -32,12 +87,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   });
 
   const gids = [...new Set(submissions.flatMap((s) => s.lines.map((l) => l.shopifyProductGid)))];
+  const mockById = new Map(MOCK_CATALOG_PRODUCTS.map((p) => [p.id, p]));
   const titleByGid = new Map<string, string>();
+  const imageByGid = new Map<string, string | null>();
+
+  for (const gid of gids) {
+    const mock = mockById.get(gid);
+    if (mock) {
+      titleByGid.set(gid, mock.title);
+      imageByGid.set(gid, mock.imageUrl ?? null);
+    }
+  }
 
   if (ctx.mode === "shopify" && ctx.admin && gids.length > 0) {
     const summaries = await fetchProductSummariesByGids(ctx.admin, gids);
     for (const [gid, summary] of summaries) {
       titleByGid.set(gid, summary.title);
+      imageByGid.set(gid, summary.imageUrl ?? null);
     }
   }
 
@@ -57,7 +123,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         id: line.id,
         status: line.status,
         shopifyProductGid: line.shopifyProductGid,
-        title: titleByGid.get(line.shopifyProductGid) ?? line.shopifyProductGid,
+        title: titleByGid.get(line.shopifyProductGid) ?? "Selected product",
+        imageUrl: imageByGid.get(line.shopifyProductGid) ?? null,
         itemCode: itemCodeByGid.get(line.shopifyProductGid) ?? null,
         errorMessage: line.errorMessage,
       })),
@@ -69,12 +136,18 @@ export default function SubmissionsPage() {
   const { submissions } = useLoaderData<typeof loader>();
 
   return (
-    <s-page heading="Submissions">
+    <s-page>
+      <div className={styles.pageTitleRow}>
+        <h1 className={styles.pageHeading}>Submissions</h1>
+        <Link to="/app/selected" className={styles.settingsButton}>
+          Back to Selected
+        </Link>
+      </div>
+
       <s-section>
-        <s-paragraph>History of products sent to Ethos Employee and per-line import results.</s-paragraph>
-        <s-link href="/app/selected">
-          <s-button variant="tertiary">Back to selected products</s-button>
-        </s-link>
+        <p className={styles.productMeta}>
+          History of products sent to Ethos, with per-product import results from each batch.
+        </p>
       </s-section>
 
       {submissions.length === 0 ? (
@@ -83,43 +156,61 @@ export default function SubmissionsPage() {
             title="No submissions yet"
             description="Submit configured products from Selected products to see status here."
             action={
-              <s-link href="/app/selected">
-                <s-button variant="primary">Go to selection</s-button>
-              </s-link>
+              <Link to="/app/selected" className={styles.primarySubmitButton}>
+                Go to Selected
+              </Link>
             }
           />
         </s-section>
       ) : (
-        submissions.map((s) => (
-          <s-section
-            key={s.id}
-            heading={
-              s.submittedAt
-                ? new Date(s.submittedAt).toLocaleString()
-                : new Date(s.createdAt).toLocaleString()
-            }
-          >
-            <s-badge tone={batchStatusTone(s.status)}>{s.status}</s-badge>
-            <ul className={styles.rowList} style={{ marginTop: "0.75rem" }}>
-              {s.lines.map((line) => (
-                <li key={line.id} className={styles.rowItem}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <strong>{line.title}</strong>
-                    {line.itemCode ? (
-                      <div className={styles.productMeta}>Ethos item {line.itemCode}</div>
-                    ) : null}
-                    {line.errorMessage ? (
-                      <div style={{ color: "#d72c0d", fontSize: "0.8125rem", marginTop: "0.25rem" }}>
-                        {line.errorMessage}
-                      </div>
-                    ) : null}
+        <s-section>
+          <div className={styles.submissionBatchList}>
+            {submissions.map((batch) => (
+              <article key={batch.id} className={styles.submissionBatchCard}>
+                <header className={styles.submissionBatchHeader}>
+                  <div>
+                    <h2 className={styles.submissionBatchTitle}>
+                      {formatBatchWhen(batch.submittedAt, batch.createdAt)}
+                    </h2>
+                    <p className={styles.submissionBatchMeta}>{batchSummaryLines(batch.lines)}</p>
                   </div>
-                  <s-badge tone={lineStatusTone(line.status)}>{line.status}</s-badge>
-                </li>
-              ))}
-            </ul>
-          </s-section>
-        ))
+                  <span className={batchStatusTagClass(batch.status)}>
+                    {batchStatusLabel(batch.status)}
+                  </span>
+                </header>
+                <ul className={styles.submissionBatchLines}>
+                  {batch.lines.map((line) => (
+                    <li key={line.id} className={styles.rowItem}>
+                      <img
+                        src={line.imageUrl ?? PLACEHOLDER_IMAGE}
+                        alt=""
+                        className={styles.thumbRow}
+                      />
+                      <div className={styles.rowItemMain}>
+                        <strong>{line.title}</strong>
+                        {line.itemCode ? (
+                          <p className={styles.productMeta}>Ethos item {line.itemCode}</p>
+                        ) : null}
+                        {line.errorMessage ? (
+                          <p className={styles.submissionLineError}>{line.errorMessage}</p>
+                        ) : null}
+                      </div>
+                      <Link
+                        to={`/app/selected/configure?productGid=${encodeURIComponent(line.shopifyProductGid)}`}
+                        className={styles.submissionLineViewLink}
+                      >
+                        View
+                      </Link>
+                      <span className={lineStatusTagClass(line.status)}>
+                        {lineStatusLabel(line.status)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </article>
+            ))}
+          </div>
+        </s-section>
       )}
     </s-page>
   );
