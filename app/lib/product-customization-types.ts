@@ -71,10 +71,6 @@ export function customizationCustomerAddOnMessage(
     case "embroidery_flat":
     case "embroidery_puff":
       return variableComplexityAddOnMessage("embroidery");
-    default: {
-      const amount = formatCustomizationCustomerAddOnUsd(type.customerAddOnUsd);
-      return `Ethos will add ${amount} for this to the customer during customization`;
-    }
   }
 }
 

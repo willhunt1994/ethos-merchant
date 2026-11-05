@@ -809,6 +809,10 @@ function ConfigureSelectedProductPageInner({
     fd.set("customizationTypeIds", JSON.stringify(customizationTypeIds));
     try {
       const data = await customizationTypesFetcher.submit(fd);
+      if (!data.ok) {
+        setCustomizationError(data.error);
+        return;
+      }
       setSavedCustomizationTypeIds(parseCustomizationTypeIds(data.customizationTypeIds));
       setCustomizationError(null);
     } catch (err) {
