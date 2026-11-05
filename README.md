@@ -89,6 +89,8 @@ That means Shopify is loading `application_url` as **`https://example.com`** ins
 
 Phase 5 supplier linking: [docs/phase-5-supplier-link.md](./docs/phase-5-supplier-link.md)
 
+Phase 9 E2E (dev store): [docs/phase-9-e2e-dev-store.md](./docs/phase-9-e2e-dev-store.md) · run `pnpm e2e:smoke` with tunnel + Employee API up
+
 ## Railway
 
 Project **wonderful-adventure** · service **Postgres** (integration DB) · redeploy app service when linked to this repo.

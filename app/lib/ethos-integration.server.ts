@@ -125,3 +125,114 @@ export async function importProductToEthos(
     cadCount: parsed.cadCount ?? payload.attachments.length,
   };
 }
+
+export type EthosSyncProductPayload = {
+  supplierSlug: string;
+  itemCode: string;
+  label?: string | null;
+  productType?: string | null;
+  productStatus?: "available" | "sample" | "discontinued";
+  active?: boolean;
+};
+
+export type EthosSyncInventoryVariant = {
+  color: string;
+  size: string;
+  quantity?: number;
+  locationQuantities?: Record<string, number>;
+  mergeLocationQuantities?: boolean;
+};
+
+export type EthosSyncResult = { ok: true } | { ok: false; error: string; status?: number };
+
+async function postEthosIntegration(
+  path: string,
+  method: "POST" | "PATCH",
+  body: unknown,
+): Promise<EthosSyncResult> {
+  const configError = getEthosIntegrationConfigError();
+  if (configError) {
+    return { ok: false, error: configError, status: 503 };
+  }
+
+  const url = `${integrationBaseUrl()}${path}`;
+  const apiKey = integrationApiKey()!;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method,
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "Network error";
+    return { ok: false, error: `Could not reach Ethos API: ${message}` };
+  }
+
+  let parsed: { ok?: boolean; error?: string };
+  try {
+    parsed = (await response.json()) as { ok?: boolean; error?: string };
+  } catch {
+    return { ok: false, error: `Ethos API returned non-JSON (${response.status})`, status: response.status };
+  }
+
+  if (!response.ok || parsed.ok === false) {
+    return {
+      ok: false,
+      error: parsed.error ?? `Ethos API error (${response.status})`,
+      status: response.status,
+    };
+  }
+
+  return { ok: true };
+}
+
+export async function syncProductToEthos(payload: EthosSyncProductPayload): Promise<EthosSyncResult> {
+  return postEthosIntegration("/integrations/shopify/v1/sync-product", "PATCH", payload);
+}
+
+export async function syncInventoryToEthos(
+  supplierSlug: string,
+  itemCode: string,
+  variants: EthosSyncInventoryVariant[],
+): Promise<EthosSyncResult & { updatedCount?: number }> {
+  const configError = getEthosIntegrationConfigError();
+  if (configError) {
+    return { ok: false, error: configError, status: 503 };
+  }
+
+  const url = `${integrationBaseUrl()}/integrations/shopify/v1/sync-inventory`;
+  const apiKey = integrationApiKey()!;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({ supplierSlug, itemCode, variants }),
+    });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "Network error";
+    return { ok: false, error: `Could not reach Ethos API: ${message}` };
+  }
+
+  const parsed = (await response.json()) as { ok?: boolean; error?: string; updatedCount?: number };
+  if (!response.ok || parsed.ok === false) {
+    return {
+      ok: false,
+      error: parsed.error ?? `Ethos API error (${response.status})`,
+      status: response.status,
+    };
+  }
+
+  return { ok: true, updatedCount: parsed.updatedCount };
+}

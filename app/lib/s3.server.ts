@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   DeleteObjectCommand,
+  GetObjectCommand,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
@@ -126,6 +127,22 @@ export async function createPresignedPutObjectUrl(
     ServerSideEncryption: "AES256",
   });
   return getSignedUrl(getClient(), cmd, { expiresIn: expiresSeconds });
+}
+
+export async function getPrivateObject(storageKey: string): Promise<Uint8Array> {
+  const { bucket } = getAwsConfig();
+  if (!bucket) throw new Error("AWS_S3_BUCKET is not configured");
+  const response = await getClient().send(
+    new GetObjectCommand({
+      Bucket: bucket,
+      Key: storageKey,
+    }),
+  );
+  const body = await response.Body?.transformToByteArray();
+  if (!body?.length) {
+    throw new Error("Empty object from S3");
+  }
+  return body;
 }
 
 export async function deletePrivateObject(storageKey: string): Promise<void> {

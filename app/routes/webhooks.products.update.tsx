@@ -1,11 +1,14 @@
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
+import { runIdempotentWebhook } from "../lib/webhooks/dedupe.server";
+import { handleProductsUpdateWebhook } from "../lib/webhook-sync.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { shop, topic, payload } = await authenticate.webhook(request);
 
-  console.log(`Received ${topic} Event for ${shop}`);
-  console.log(JSON.stringify(payload, null, 2));
+  await runIdempotentWebhook(shop, topic, payload, async () => {
+    await handleProductsUpdateWebhook(shop, payload as Record<string, unknown>);
+  });
 
   return new Response(null, { status: 200 });
 };

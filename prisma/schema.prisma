@@ -75,11 +75,12 @@ enum AttachmentStatus {
 }
 
 model ProductSelection {
-  id                String   @id @default(cuid())
-  shopDomain        String
-  shopifyProductGid String
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  id                  String   @id @default(cuid())
+  shopDomain          String
+  shopifyProductGid   String
+  offerCustomization  Boolean  @default(false)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
   variantSelections VariantSelection[]
   attachments       ProductAttachment[]

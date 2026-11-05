@@ -5,9 +5,13 @@ import type {
   ShouldRevalidateFunctionArgs,
 } from "react-router";
 import { Link, useFetcher, useLoaderData } from "react-router";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouteActionFetcher } from "../lib/use-route-action-fetcher";
 import { EmbeddedAppErrorBoundary } from "../components/embedded-app-error-boundary";
+import { PdfDropzonePreview } from "../components/embedded/pdf-dropzone-preview";
+import { UploadedAttachmentPreview } from "../components/embedded/uploaded-attachment-preview";
+import { renderPdfPageDataUrls } from "../lib/pdf-preview.client";
+import styles from "../styles/embedded-app.module.css";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import prisma from "../db.server";
 import {
@@ -16,6 +20,7 @@ import {
   toClientProductAttachment,
   type ClientProductAttachment,
 } from "../lib/attachments.server";
+import { PLACEHOLDER_IMAGE } from "../lib/catalog-product";
 import { MOCK_CATALOG_PRODUCTS } from "../lib/mock-catalog";
 import { requireMerchantContext } from "../lib/merchant-auth.server";
 import { fetchProductSummariesByGids } from "../lib/shopify/products.server";
@@ -23,6 +28,8 @@ import { fetchConfigureVariants } from "../lib/shopify/variants.server";
 import { Decimal } from "@prisma/client/runtime/library";
 import {
   ATTACHMENT_CATEGORIES,
+  extensionFromFilename,
+  isAllowedConfigureDesignUpload,
   isAllowedDesignUpload,
   MAX_ATTACHMENT_BYTES,
   type AttachmentCategory,
@@ -107,6 +114,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return {
     shopifyProductGid,
     title: live?.title ?? mock?.title ?? shopifyProductGid,
+    imageUrl: live?.imageUrl ?? mock?.imageUrl ?? null,
+    offerCustomization: selection.offerCustomization,
     attachments: attachments.map(toClientProductAttachment),
     s3Configured: isMerchantS3Configured() || ctx.mode === "preview",
     categories: ATTACHMENT_CATEGORIES,
@@ -175,9 +184,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       String(form.get("contentType") ?? "").trim() ||
       (fileBlob instanceof File ? fileBlob.type : "") ||
       "application/octet-stream";
-    const category = String(form.get("category") ?? "other") as AttachmentCategory;
-    const label = String(form.get("label") ?? "").trim() || null;
+    const category = String(form.get("category") ?? "product_design") as AttachmentCategory;
+    const label = String(form.get("label") ?? "").trim();
     const byteSize = fileBlob.size;
+
+    if (!label) {
+      return Response.json({ ok: false, error: "Label is required" }, { status: 400 });
+    }
 
     if (byteSize > MAX_ATTACHMENT_BYTES) {
       return Response.json(
@@ -185,9 +198,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         { status: 400 },
       );
     }
-    if (!isAllowedDesignUpload(filename, contentType)) {
+    if (!isAllowedConfigureDesignUpload(filename)) {
       return Response.json(
-        { ok: false, error: "Allowed types: PDF, AI, EPS, SVG, PNG, JPG, DOCX" },
+        { ok: false, error: "PDF or AI files only please" },
         { status: 400 },
       );
     }
@@ -353,6 +366,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return Response.json({ ok: true });
   }
 
+  if (intent === "save-customization") {
+    const raw = String(form.get("offerCustomization") ?? "").trim().toLowerCase();
+    const offerCustomization = raw === "yes" || raw === "true" || raw === "1";
+    await prisma.productSelection.update({
+      where: { id: selection.id },
+      data: { offerCustomization },
+    });
+    return Response.json({ ok: true, offerCustomization });
+  }
+
   if (intent === "save-pricing") {
     const raw = String(form.get("variantPricing") ?? "");
     let rows: Array<{ shopifyVariantGid: string; ethosPrice: string; selected: boolean }>;
@@ -392,8 +415,63 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   return Response.json({ ok: false, error: "Unknown intent" }, { status: 400 });
 };
 
-function categoryLabel(value: string, categories: typeof ATTACHMENT_CATEGORIES): string {
-  return categories.find((c) => c.value === value)?.label ?? value;
+function attachmentStatusTagClass(status: string): string {
+  switch (status) {
+    case "uploaded":
+      return styles.attachmentStatusTagSuccess;
+    case "failed":
+      return styles.attachmentStatusTagDanger;
+    default:
+      return styles.attachmentStatusTagNeutral;
+  }
+}
+
+function attachmentStatusLabel(status: string): string {
+  switch (status) {
+    case "uploaded":
+      return "Uploaded";
+    case "failed":
+      return "Failed";
+    case "pending":
+      return "Pending";
+    default:
+      return status;
+  }
+}
+
+function parseMoney(value: string | null | undefined): number | null {
+  if (value == null) return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === "—") return null;
+  const n = Number(trimmed.replace(/[^0-9.-]+/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
+function formatUsd(amount: number): string {
+  return `$${amount.toFixed(2)}`;
+}
+
+function formatShopifyPriceDisplay(shopifyPrice: string): string {
+  const amount = parseMoney(shopifyPrice);
+  return amount != null ? formatUsd(amount) : shopifyPrice;
+}
+
+function pendingFilePreviewKind(file: File): "image" | "pdf" | "document" {
+  if (file.type.startsWith("image/")) return "image";
+  const ext = extensionFromFilename(file.name);
+  if (file.type === "application/pdf" || ext === "pdf") return "pdf";
+  return "document";
+}
+
+function formatEthosShopifyMargin(shopifyPrice: string, ethosPrice: string | null): string {
+  const shopify = parseMoney(shopifyPrice);
+  const ethos = parseMoney(ethosPrice);
+  if (shopify == null || ethos == null) return "—";
+  const dollars = ethos - shopify;
+  const pct = ethos !== 0 ? (dollars / ethos) * 100 : null;
+  const sign = dollars >= 0 ? "+" : "";
+  if (pct == null) return `${sign}${formatUsd(dollars)}`;
+  return `${sign}${formatUsd(dollars)} · ${pct.toFixed(1)}%`;
 }
 
 export default function ConfigureSelectedProductPage() {
@@ -403,6 +481,8 @@ export default function ConfigureSelectedProductPage() {
 
 function ConfigureSelectedProductPageInner({
   title,
+  imageUrl,
+  offerCustomization: loaderOfferCustomization,
   attachments: loaderAttachments,
   s3Configured,
   categories,
@@ -410,6 +490,9 @@ function ConfigureSelectedProductPageInner({
   variants: loaderVariants,
 }: Awaited<ReturnType<typeof loader>>) {
   const deleteFetcher = useFetcher();
+  const customizationFetcher = useRouteActionFetcher<
+    { ok: true; offerCustomization: boolean } | { ok: false; error: string }
+  >();
   const actionFetcher = useRouteActionFetcher<
     | { ok: true; attachment: ClientProductAttachment }
     | { ok: true }
@@ -417,15 +500,74 @@ function ConfigureSelectedProductPageInner({
   >();
   const pricingFetcher = useRouteActionFetcher<{ ok: true } | { ok: false; error: string }>();
   const fileRef = useRef<HTMLInputElement>(null);
-  const [category, setCategory] = useState<AttachmentCategory>("product_design");
+  const category: AttachmentCategory = "product_design";
   const [label, setLabel] = useState("");
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [pendingPreviewUrl, setPendingPreviewUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [samePriceForAll, setSamePriceForAll] = useState(false);
   const [extraAttachments, setExtraAttachments] = useState<ClientProductAttachment[]>([]);
   const [removedIds, setRemovedIds] = useState<Set<string>>(() => new Set());
   const [variantRows, setVariantRows] = useState(loaderVariants);
   const [pricingSaved, setPricingSaved] = useState<string | null>(null);
   const [pricingError, setPricingError] = useState<string | null>(null);
+  const [dropActive, setDropActive] = useState(false);
+  const [offerCustomization, setOfferCustomization] = useState(loaderOfferCustomization);
+  const [attachmentPreviewById, setAttachmentPreviewById] = useState<Record<string, string>>(
+    {},
+  );
+
+  const setOfferCustomizationChoice = useCallback(
+    (enabled: boolean) => {
+      setOfferCustomization(enabled);
+      const fd = new FormData();
+      fd.set("intent", "save-customization");
+      fd.set("offerCustomization", enabled ? "yes" : "no");
+      void customizationFetcher.submit(fd);
+    },
+    [customizationFetcher],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (pendingPreviewUrl) URL.revokeObjectURL(pendingPreviewUrl);
+    };
+  }, [pendingPreviewUrl]);
+
+  const setPendingUploadFile = useCallback((file: File | null) => {
+    if (file && !isAllowedConfigureDesignUpload(file.name)) {
+      setUploadError("PDF or AI files only please");
+      return;
+    }
+    setUploadError(null);
+    setPendingFile(file);
+    setPendingPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      if (!file) return null;
+      return URL.createObjectURL(file);
+    });
+  }, []);
+
+  const pendingPreviewKind = pendingFile ? pendingFilePreviewKind(pendingFile) : null;
+
+  const hasAnyVariantPrice = variantRows.some(
+    (r) => r.ethosPrice != null && String(r.ethosPrice).trim() !== "",
+  );
+
+  const updateVariantPrice = useCallback(
+    (shopifyVariantGid: string, ethosPrice: string) => {
+      setVariantRows((prev) => {
+        if (samePriceForAll) {
+          return prev.map((r) => (r.selected ? { ...r, ethosPrice } : r));
+        }
+        return prev.map((r) =>
+          r.shopifyVariantGid === shopifyVariantGid ? { ...r, ethosPrice } : r,
+        );
+      });
+    },
+    [samePriceForAll],
+  );
 
   const attachments = useMemo(() => {
     const fromLoader = loaderAttachments.filter((a) => !removedIds.has(a.id));
@@ -435,7 +577,11 @@ function ConfigureSelectedProductPageInner({
   }, [extraAttachments, loaderAttachments, removedIds]);
 
   const runUpload = useCallback(async () => {
-    const file = fileRef.current?.files?.[0];
+    const file = pendingFile ?? fileRef.current?.files?.[0] ?? null;
+    if (!label.trim()) {
+      setUploadError("Label is required.");
+      return;
+    }
     if (!file) {
       setUploadError("Choose a file first.");
       return;
@@ -453,7 +599,7 @@ function ConfigureSelectedProductPageInner({
       uploadFd.set("filename", file.name);
       uploadFd.set("contentType", file.type || "application/octet-stream");
       uploadFd.set("category", category);
-      if (label.trim()) uploadFd.set("label", label.trim());
+      uploadFd.set("label", label.trim());
 
       const result = await actionFetcher.submit(uploadFd, { multipart: true });
       if (!result.ok || !("attachment" in result) || !result.attachment) {
@@ -466,14 +612,27 @@ function ConfigureSelectedProductPageInner({
         ...prev.filter((a) => a.id !== attachment.id),
       ]);
 
+      if (file) {
+        try {
+          const data = new Uint8Array(await file.arrayBuffer());
+          const urls = await renderPdfPageDataUrls(data, { maxWidth: 240, maxPages: 1 });
+          if (urls[0]) {
+            setAttachmentPreviewById((prev) => ({ ...prev, [attachment.id]: urls[0]! }));
+          }
+        } catch {
+          /* preview cache optional */
+        }
+      }
+
       if (fileRef.current) fileRef.current.value = "";
+      setPendingUploadFile(null);
       setLabel("");
     } catch (e) {
       setUploadError(e instanceof Error ? e.message : "Upload failed");
     } finally {
       setUploading(false);
     }
-  }, [actionFetcher, category, label, maxBytes]);
+  }, [actionFetcher, category, label, maxBytes, pendingFile, setPendingUploadFile]);
 
   const savePricing = useCallback(async () => {
     setPricingError(null);
@@ -506,170 +665,328 @@ function ConfigureSelectedProductPageInner({
   );
 
   return (
-    <s-page heading="Configure product">
-      <s-section heading={title}>
-        <s-paragraph>
-          <Link to="/app/selected">← Back to selected</Link>
-        </s-paragraph>
-        <s-paragraph>
-          Set Ethos pricing per variant and upload design files. Files stay in S3 until you submit from Selected products.
-        </s-paragraph>
-        {!s3Configured ? (
-          <p style={{ background: "#fff7ed", padding: "8px 12px", borderRadius: "8px", fontSize: "13px" }}>
-            S3 credentials are not set — uploads will fail in live mode until AWS env vars are configured.
-          </p>
-        ) : null}
-      </s-section>
+    <s-page>
+      <div className={styles.pageTitleRow}>
+        <h1 className={styles.pageHeading}>{title}</h1>
+        <Link to="/app/selected" className={styles.settingsButton}>
+          Back to Selection
+        </Link>
+      </div>
+      {!s3Configured ? (
+        <s-section>
+          <s-banner tone="warning" heading="Uploads unavailable">
+            S3 credentials are not set — configure AWS env vars before uploading design files.
+          </s-banner>
+        </s-section>
+      ) : null}
 
-      <s-section heading="Ethos pricing (per variant)">
+      <s-section>
+        <div className={styles.sectionStepHeading}>
+          <span className={styles.workflowStepNumber} aria-hidden>
+            1
+          </span>
+          <h2 className={styles.sectionTitleConfigure}>Ethos Pricing (Per Variant)</h2>
+        </div>
         {variantRows.length === 0 ? (
           <s-paragraph>No variants found for this product.</s-paragraph>
         ) : (
-          <>
-            <table style={{ width: "100%", maxWidth: "720px", borderCollapse: "collapse", fontSize: "13px" }}>
-              <thead>
-                <tr style={{ textAlign: "left", borderBottom: "1px solid #e4e4e7" }}>
-                  <th style={{ padding: "8px 4px" }}>Include</th>
-                  <th style={{ padding: "8px 4px" }}>Variant</th>
-                  <th style={{ padding: "8px 4px" }}>Shopify price</th>
-                  <th style={{ padding: "8px 4px" }}>Ethos price (USD)</th>
-                </tr>
-              </thead>
-              <tbody>
-                {variantRows.map((row) => (
-                  <tr key={row.shopifyVariantGid} style={{ borderBottom: "1px solid #f4f4f5" }}>
-                    <td style={{ padding: "8px 4px" }}>
-                      <input
-                        type="checkbox"
-                        checked={row.selected}
-                        onChange={(e) =>
-                          setVariantRows((prev) =>
-                            prev.map((r) =>
-                              r.shopifyVariantGid === row.shopifyVariantGid
-                                ? { ...r, selected: e.target.checked }
-                                : r,
-                            ),
-                          )
-                        }
-                      />
-                    </td>
-                    <td style={{ padding: "8px 4px" }}>
-                      {row.title}
-                      {row.sku ? (
-                        <div style={{ color: "#71717a", fontSize: "12px" }}>SKU {row.sku}</div>
-                      ) : null}
-                    </td>
-                    <td style={{ padding: "8px 4px" }}>{row.shopifyPrice}</td>
-                    <td style={{ padding: "8px 4px" }}>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={row.ethosPrice ?? ""}
-                        disabled={!row.selected}
-                        onChange={(e) =>
-                          setVariantRows((prev) =>
-                            prev.map((r) =>
-                              r.shopifyVariantGid === row.shopifyVariantGid
-                                ? { ...r, ethosPrice: e.target.value }
-                                : r,
-                            ),
-                          )
-                        }
-                        style={{ width: "120px" }}
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div style={{ marginTop: "12px", display: "flex", gap: "12px", alignItems: "center" }}>
-              <button
-                type="button"
-                disabled={pricingFetcher.isSubmitting}
-                onClick={() => void savePricing()}
-              >
-                {pricingFetcher.isSubmitting ? "Saving…" : "Save pricing"}
-              </button>
-              {pricingSaved ? (
-                <span style={{ color: "#15803d", fontSize: "13px" }}>{pricingSaved}</span>
-              ) : null}
-              {pricingError ? (
-                <span style={{ color: "#b91c1c", fontSize: "13px" }}>{pricingError}</span>
-              ) : null}
+          <div className={styles.configurePricingLayout}>
+            <div className={styles.configureProductMedia}>
+              <img
+                src={imageUrl ?? PLACEHOLDER_IMAGE}
+                alt=""
+                className={styles.configureProductImage}
+              />
             </div>
-          </>
+            <div className={styles.configurePricingMain}>
+            <div className={styles.tableWrapFull}>
+              <table className={styles.dataTable}>
+                <thead>
+                  <tr>
+                    <th scope="col">Include</th>
+                    <th scope="col">Variant</th>
+                    <th scope="col">Shopify Price</th>
+                    <th scope="col" className={styles.ethosPriceHeader}>
+                      <span>Ethos Price (USD)</span>
+                      {hasAnyVariantPrice ? (
+                        <label className={styles.samePriceOptionHeader}>
+                          <input
+                            type="checkbox"
+                            checked={samePriceForAll}
+                            onChange={(e) => {
+                              const enabled = e.target.checked;
+                              setSamePriceForAll(enabled);
+                              if (enabled) {
+                                const source = variantRows.find(
+                                  (r) =>
+                                    r.ethosPrice != null && String(r.ethosPrice).trim() !== "",
+                                )?.ethosPrice;
+                                if (source) {
+                                  setVariantRows((prev) =>
+                                    prev.map((r) =>
+                                      r.selected ? { ...r, ethosPrice: source } : r,
+                                    ),
+                                  );
+                                }
+                              }
+                            }}
+                          />
+                          Same for all selected variants
+                        </label>
+                      ) : null}
+                    </th>
+                    <th scope="col">Margin</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {variantRows.map((row) => (
+                    <tr key={row.shopifyVariantGid}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={row.selected}
+                          onChange={(e) =>
+                            setVariantRows((prev) =>
+                              prev.map((r) =>
+                                r.shopifyVariantGid === row.shopifyVariantGid
+                                  ? { ...r, selected: e.target.checked }
+                                  : r,
+                              ),
+                            )
+                          }
+                        />
+                      </td>
+                      <td>
+                        {row.title}
+                        {row.sku ? (
+                          <div className={styles.productMeta}>SKU {row.sku}</div>
+                        ) : null}
+                      </td>
+                      <td>{formatShopifyPriceDisplay(row.shopifyPrice)}</td>
+                      <td>
+                        <div className={styles.priceInputWrap}>
+                          <span className={styles.priceInputPrefix} aria-hidden>
+                            $
+                          </span>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={row.ethosPrice ?? ""}
+                            disabled={!row.selected}
+                            onChange={(e) =>
+                              updateVariantPrice(row.shopifyVariantGid, e.target.value)
+                            }
+                            className={styles.priceInputField}
+                            aria-label={`Ethos price for ${row.title}`}
+                          />
+                        </div>
+                      </td>
+                      <td className={styles.marginCell}>
+                        {formatEthosShopifyMargin(row.shopifyPrice, row.ethosPrice)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className={styles.configureActionRow}>
+              <s-stack direction="inline" gap="base">
+                <s-button
+                  type="button"
+                  variant="primary"
+                  disabled={pricingFetcher.isSubmitting}
+                  onClick={() => void savePricing()}
+                >
+                  {pricingFetcher.isSubmitting ? "Saving…" : "Save Pricing"}
+                </s-button>
+                {pricingSaved ? (
+                  <span style={{ color: "#15803d", fontSize: "13px" }}>{pricingSaved}</span>
+                ) : null}
+                {pricingError ? (
+                  <span style={{ color: "#b91c1c", fontSize: "13px" }}>{pricingError}</span>
+                ) : null}
+              </s-stack>
+            </div>
+            </div>
+          </div>
         )}
       </s-section>
 
-      <s-section heading="Upload design file">
-        <div style={{ display: "flex", flexDirection: "column", gap: "12px", maxWidth: "480px" }}>
-          <label>
-            Category
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value as AttachmentCategory)}
-              style={{ display: "block", marginTop: "4px", width: "100%" }}
+      <s-section>
+        <div className={styles.sectionStepHeading}>
+          <span className={styles.workflowStepNumber} aria-hidden>
+            2
+          </span>
+          <div className={styles.sectionStepHeadingText}>
+            <h2 className={styles.sectionTitleConfigure}>Upload Design File</h2>
+          </div>
+        </div>
+        <fieldset className={styles.yesNoFieldset}>
+          <legend className={styles.formFieldLabel}>Offer Customization on this product</legend>
+          <div className={styles.yesNoOptions} role="radiogroup" aria-label="Offer customization">
+            <label className={styles.yesNoOption}>
+              <input
+                type="radio"
+                name="offerCustomization"
+                checked={offerCustomization}
+                onChange={() => setOfferCustomizationChoice(true)}
+              />
+              Yes
+            </label>
+            <label className={styles.yesNoOption}>
+              <input
+                type="radio"
+                name="offerCustomization"
+                checked={!offerCustomization}
+                onChange={() => setOfferCustomizationChoice(false)}
+              />
+              No
+            </label>
+          </div>
+        </fieldset>
+        {!offerCustomization ? (
+          <p className={styles.sectionSubtext}>
+            Design files are not required for this product.
+          </p>
+        ) : (
+        <div className={styles.configureFormStack}>
+          <p className={styles.sectionSubtext}>
+            <a
+              href="/example-design-guidance.pdf"
+              className={styles.inlineTextLink}
+              download="ethos-design-guidance-example.pdf"
             >
-              {categories.map((c) => (
-                <option key={c.value} value={c.value}>
-                  {c.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Label (optional)
+              Download example design guidance file
+            </a>
+          </p>
+          <label className={styles.formField}>
+            <span className={styles.formFieldLabel}>
+              Label <span className={styles.requiredMark} aria-hidden>*</span>
+            </span>
             <input
               type="text"
               value={label}
               onChange={(e) => setLabel(e.target.value)}
               placeholder="e.g. Spring 2026 chest print"
-              style={{ display: "block", marginTop: "4px", width: "100%" }}
+              className={styles.field}
+              required={offerCustomization}
             />
           </label>
-          <label>
-            File
-            <input ref={fileRef} type="file" style={{ display: "block", marginTop: "4px" }} />
-          </label>
-          <button type="button" disabled={uploading || actionFetcher.isSubmitting} onClick={() => void runUpload()}>
-            {uploading || actionFetcher.isSubmitting ? "Uploading…" : "Upload to S3"}
-          </button>
-          {uploadError ? (
-            <p style={{ color: "#b91c1c", margin: 0, fontSize: "13px" }}>{uploadError}</p>
-          ) : null}
-        </div>
-      </s-section>
-
-      <s-section heading="Uploaded files">
-        {attachments.length === 0 ? (
-          <s-paragraph>No attachments yet.</s-paragraph>
-        ) : (
-          <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-            {attachments.map((a) => (
-              <li
-                key={a.id}
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  padding: "10px 0",
-                  borderBottom: "1px solid #eee",
-                }}
-              >
-                <div>
-                  <strong>{a.filename}</strong>
-                  <div style={{ fontSize: "12px", color: "#71717a" }}>
-                    {categoryLabel(a.category, categories)}
-                    {a.label ? ` · ${a.label}` : ""} · {a.status}
+          <div
+            className={`${styles.dropzone} ${dropActive ? styles.dropzoneActive : ""} ${
+              pendingFile ? styles.dropzoneHasFile : ""
+            }`}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDropActive(true);
+            }}
+            onDragLeave={() => setDropActive(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDropActive(false);
+              const file = e.dataTransfer.files?.[0];
+              if (file) setPendingUploadFile(file);
+            }}
+            onClick={() => fileRef.current?.click()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                fileRef.current?.click();
+              }
+            }}
+            role="button"
+            tabIndex={0}
+            aria-label="Upload design file"
+          >
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".pdf,.ai,application/pdf,application/postscript,application/vnd.adobe.illustrator"
+              className={styles.dropzoneInput}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) setPendingUploadFile(file);
+              }}
+            />
+            {pendingFile && pendingPreviewUrl ? (
+              <div className={styles.dropzonePreviewStack}>
+                {pendingPreviewKind === "image" ? (
+                  <img
+                    src={pendingPreviewUrl}
+                    alt=""
+                    className={styles.dropzonePreview}
+                  />
+                ) : pendingPreviewKind === "pdf" ? (
+                  <PdfDropzonePreview file={pendingFile} />
+                ) : (
+                  <div className={styles.dropzoneDocPreview} aria-hidden>
+                    {extensionFromFilename(pendingFile.name).toUpperCase()}
                   </div>
+                )}
+                <div className={styles.dropzoneFileMeta}>
+                  <span className={styles.dropzoneFileName}>{pendingFile.name}</span>
+                  <span className={styles.dropzoneHint}>
+                    {Math.round(pendingFile.size / 1024)} KB · Click or drop to replace
+                  </span>
                 </div>
-                <button type="button" onClick={() => removeAttachment(a.id)}>
-                  Remove
-                </button>
-              </li>
-            ))}
-          </ul>
+              </div>
+            ) : (
+              <div className={styles.dropzoneEmpty}>
+                <span className={styles.dropzoneTitle}>Drag and drop a design file</span>
+                <span className={styles.dropzoneHint}>PDF or AI files only please</span>
+              </div>
+            )}
+          </div>
+          <s-button
+            type="button"
+            variant="primary"
+            disabled={uploading || actionFetcher.isSubmitting}
+            onClick={() => void runUpload()}
+          >
+            {uploading || actionFetcher.isSubmitting ? "Uploading…" : "Upload File"}
+          </s-button>
+          {uploadError ? (
+            <p className={styles.formError}>{uploadError}</p>
+          ) : null}
+          <div className={styles.uploadedFilesBlock}>
+            <h3 className={styles.uploadedFilesHeading}>Uploaded Files</h3>
+            {attachments.length === 0 ? (
+              <p className={styles.sectionSubtext}>No attachments yet.</p>
+            ) : (
+              <ul className={styles.uploadedFilesList}>
+                {attachments.map((a) => (
+                  <li key={a.id} className={styles.uploadedFileRow}>
+                    <div className={styles.uploadedFilePreview}>
+                      <UploadedAttachmentPreview
+                        attachment={a}
+                        cachedPreviewUrl={attachmentPreviewById[a.id]}
+                      />
+                    </div>
+                    <div className={styles.uploadedFileMeta}>
+                      <strong>{a.filename}</strong>
+                      <div className={styles.uploadedFileMetaRow}>
+                        {a.label ? (
+                          <span className={styles.uploadedFileLabel}>{a.label}</span>
+                        ) : null}
+                        <span className={attachmentStatusTagClass(a.status)}>
+                          {attachmentStatusLabel(a.status)}
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className={styles.dangerButton}
+                      onClick={() => removeAttachment(a.id)}
+                    >
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
         )}
       </s-section>
     </s-page>

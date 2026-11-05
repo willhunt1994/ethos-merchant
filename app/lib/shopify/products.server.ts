@@ -109,6 +109,88 @@ function buildShopifySearchQuery(input: {
   return parts.join(" ");
 }
 
+export type ProductTypeCount = {
+  productType: string;
+  count: number;
+};
+
+const PRODUCT_TYPE_SCAN_QUERY = `#graphql
+  query EthosProductTypeScan($first: Int!, $after: String, $query: String) {
+    products(first: $first, after: $after, query: $query, sortKey: PRODUCT_TYPE) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        productType
+      }
+    }
+  }
+`;
+
+export function aggregateProductTypeCounts(
+  rows: Array<{ productType: string }>,
+): ProductTypeCount[] {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const label = row.productType?.trim() || "Uncategorized";
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([productType, count]) => ({ productType, count }));
+}
+
+export async function fetchProductTypeCounts(
+  admin: ShopifyAdmin,
+  options: {
+    q?: string;
+    status?: string;
+    vendor?: string;
+  },
+): Promise<ProductTypeCount[]> {
+  const query = buildShopifySearchQuery(options);
+  const rows: Array<{ productType: string }> = [];
+  let after: string | null = null;
+  let guard = 0;
+
+  while (guard < 40) {
+    guard += 1;
+    const response = await admin.graphql(PRODUCT_TYPE_SCAN_QUERY, {
+      variables: {
+        first: 250,
+        after,
+        query: query ?? null,
+      },
+    });
+
+    const json = (await response.json()) as {
+      data?: {
+        products?: {
+          pageInfo: { hasNextPage: boolean; endCursor: string | null };
+          nodes: Array<{ productType: string }>;
+        };
+      };
+      errors?: unknown;
+    };
+
+    if (json.errors) {
+      throw new Error(`Shopify GraphQL error: ${JSON.stringify(json.errors)}`);
+    }
+
+    const connection = json.data?.products;
+    const nodes = connection?.nodes ?? [];
+    rows.push(...nodes);
+
+    if (!connection?.pageInfo.hasNextPage || !connection.pageInfo.endCursor) {
+      break;
+    }
+    after = connection.pageInfo.endCursor;
+  }
+
+  return aggregateProductTypeCounts(rows);
+}
+
 export async function fetchProductsPage(
   admin: ShopifyAdmin,
   options: {
