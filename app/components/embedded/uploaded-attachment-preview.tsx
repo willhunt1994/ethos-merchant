@@ -41,13 +41,12 @@ export function UploadedAttachmentPreview({
   attachment,
   cachedPreviewUrl,
 }: UploadedAttachmentPreviewProps) {
-  const [previewUrl, setPreviewUrl] = useState<string | null>(cachedPreviewUrl ?? null);
+  const [fetchedPreviewUrl, setFetchedPreviewUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
+  const previewUrl = cachedPreviewUrl ?? fetchedPreviewUrl;
 
   useEffect(() => {
     if (cachedPreviewUrl) {
-      setPreviewUrl(cachedPreviewUrl);
-      setFailed(false);
       return;
     }
 
@@ -61,7 +60,7 @@ export function UploadedAttachmentPreview({
       const sessionPreview = cache.readCachedAttachmentPreviewImage(attachment.id);
       if (sessionPreview) {
         if (!cancelled) {
-          setPreviewUrl(sessionPreview);
+          setFetchedPreviewUrl(sessionPreview);
           setFailed(false);
         }
         return;
@@ -72,7 +71,7 @@ export function UploadedAttachmentPreview({
         if (url && fromPdfRender) {
           cache.writeCachedAttachmentPreviewImage(attachment.id, url);
         }
-        setPreviewUrl(url);
+        setFetchedPreviewUrl(url);
         setFailed(!url);
       };
 
@@ -123,7 +122,7 @@ export function UploadedAttachmentPreview({
           /* fall through */
         }
         if (!cancelled) {
-          setPreviewUrl(null);
+          setFetchedPreviewUrl(null);
           setFailed(true);
         }
       }

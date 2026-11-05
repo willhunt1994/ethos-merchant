@@ -54,7 +54,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return Response.json({ ok: false, error: "Enter a valid email address." }, { status: 400 });
   }
-  if (companyPhone && !/^[\d\s().+\-]{7,20}$/.test(companyPhone)) {
+  if (companyPhone && !/^[\d\s().+-]{7,20}$/.test(companyPhone)) {
     return Response.json(
       { ok: false, error: "Enter a valid company phone number, or leave it blank." },
       { status: 400 },

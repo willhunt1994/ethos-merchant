@@ -485,7 +485,6 @@ function ConfigureSelectedProductPageInner({
   offerCustomization: loaderOfferCustomization,
   attachments: loaderAttachments,
   s3Configured,
-  categories,
   maxBytes,
   variants: loaderVariants,
 }: Awaited<ReturnType<typeof loader>>) {

@@ -275,18 +275,27 @@ function ProductCheckbox({
   );
 }
 
+type ProductsLoaderData = Awaited<ReturnType<typeof loader>>;
+
 export default function ProductsPage() {
-  const { products, query, pageInfo, selectedCount, productType, productTypeOptions } =
-    useLoaderData<typeof loader>();
+  const loaderData = useLoaderData<typeof loader>();
+  const [searchParams] = useSearchParams();
+  return <ProductsPageContent key={searchParams.toString()} {...loaderData} />;
+}
+
+function ProductsPageContent({
+  products,
+  query,
+  pageInfo,
+  selectedCount,
+  productType,
+  productTypeOptions,
+}: ProductsLoaderData) {
   const [searchParams] = useSearchParams();
   const filterSubmit = useSubmit();
   const filterFormRef = useRef<HTMLFormElement>(null);
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [searchQ, setSearchQ] = useState(query);
-
-  useEffect(() => {
-    setSearchQ(query);
-  }, [query]);
 
   const submitProductFilters = useCallback(() => {
     if (!filterFormRef.current) return;
@@ -304,24 +313,18 @@ export default function ProductsPage() {
   const [selectionCount, setSelectionCount] = useState(selectedCount);
 
   useEffect(() => {
-    setCatalogProducts(products);
-  }, [products]);
-
-  useEffect(() => {
-    setSelectionCount(selectedCount);
-  }, [selectedCount]);
-
-  useEffect(() => {
     const data = toggleFetcher.data;
     if (!data?.ok || data.selectedCount === undefined) return;
-    setSelectionCount(data.selectedCount);
-    if (data.productGid && typeof data.selected === "boolean") {
-      setCatalogProducts((prev) =>
-        prev.map((p) =>
-          p.id === data.productGid ? { ...p, selected: data.selected! } : p,
-        ),
-      );
-    }
+    queueMicrotask(() => {
+      setSelectionCount(data.selectedCount!);
+      if (data.productGid && typeof data.selected === "boolean") {
+        setCatalogProducts((prev) =>
+          prev.map((p) =>
+            p.id === data.productGid ? { ...p, selected: data.selected! } : p,
+          ),
+        );
+      }
+    });
   }, [toggleFetcher.data]);
 
   const toggleProductSelection = useCallback(
