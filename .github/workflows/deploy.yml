@@ -32,7 +32,9 @@ jobs:
           if [ -z "$RAILWAY_TOKEN" ]; then
             echo "::warning::RAILWAY_TOKEN is not set. Skipping deploy."
             echo "Create a token in Railway → Project → Settings → Tokens, then add it as a GitHub repo secret named RAILWAY_TOKEN."
-            echo "Until then, deploy manually: railway up -y -d"
+            echo "Until then, deploy manually: railway up --detach"
             exit 0
           fi
-          railway up --detach --ci -y
+          railway up --detach --ci \
+            --service "$RAILWAY_SERVICE_ID" \
+            --environment "$RAILWAY_ENVIRONMENT_ID"
