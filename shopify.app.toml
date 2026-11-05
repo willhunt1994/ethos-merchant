@@ -4,7 +4,7 @@ client_id = "79a36d8400b076734eb79911933f091e"
 name = "ethosmerchant"
 # Static URL for TOML validation only. While `pnpm dev` runs, the CLI must override this with your tunnel URL.
 # Never leave the live app pointed at example.com — Admin embeds this URL in an iframe.
-application_url = "https://example.com"
+application_url = "https://ethos-merchant-shopify-production.up.railway.app"
 embedded = true
 
 [build]
