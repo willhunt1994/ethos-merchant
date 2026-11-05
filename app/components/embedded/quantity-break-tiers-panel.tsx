@@ -1,5 +1,5 @@
 import { Form, useNavigation } from "react-router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import styles from "../../styles/embedded-app.module.css";
 import {
   DEFAULT_QUANTITY_BREAK_TIERS,
@@ -66,22 +66,17 @@ export function QuantityBreakTiersPanel({
     navigation.state === "submitting" &&
     navigation.formData?.get("intent") === "save-quantity-break-tiers";
 
+  const initialKey = JSON.stringify(initialTiers);
+  const [syncedInitialKey, setSyncedInitialKey] = useState(initialKey);
   const [rows, setRows] = useState<EditableTier[]>(() => tiersToEditable(initialTiers));
   const [clientError, setClientError] = useState<string | null>(null);
-  const [showRemapNotice, setShowRemapNotice] = useState(false);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
 
-  useEffect(() => {
+  if (initialKey !== syncedInitialKey) {
+    setSyncedInitialKey(initialKey);
     setRows(tiersToEditable(initialTiers));
-  }, [initialTiers]);
-
-  useEffect(() => {
-    if (saveOk) {
-      setShowRemapNotice(true);
-      setClientError(null);
-    }
-  }, [saveOk]);
+  }
 
   const validate = useCallback((draft: EditableTier[]) => {
     const result = parseAndValidateQuantityBreakTiers(editableToPayload(draft));
@@ -152,7 +147,7 @@ export function QuantityBreakTiersPanel({
         Shop-wide quantity ranges for volume pricing on the configure page. Tiers must be contiguous
         with no gaps between ranges.
       </p>
-      {showRemapNotice ? (
+      {saveOk ? (
         <p className={styles.settingsHelpText} role="status">
           Tiers saved. Saved product prices are matched by quantity range — review configure pages
           after changing breaks.

@@ -19,27 +19,8 @@ type VendorSignatureLightboxProps = {
 export function VendorSignatureLightbox({
   open,
   onClose,
-  signatoryName,
-  signatoryTitle,
-  signatureText,
-  onApply,
+  ...contentProps
 }: VendorSignatureLightboxProps) {
-  const titleId = useId();
-  const [draftName, setDraftName] = useState(signatoryName);
-  const [draftTitle, setDraftTitle] = useState(signatoryTitle);
-  const [draftSignature, setDraftSignature] = useState(signatureText);
-  const [localError, setLocalError] = useState<string | null>(null);
-  const [padSession, setPadSession] = useState(0);
-
-  useEffect(() => {
-    if (!open) return;
-    setDraftName(signatoryName);
-    setDraftTitle(signatoryTitle);
-    setDraftSignature(signatureText);
-    setLocalError(null);
-    setPadSession((n) => n + 1);
-  }, [open, signatoryName, signatoryTitle, signatureText]);
-
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -50,6 +31,22 @@ export function VendorSignatureLightbox({
   }, [open, onClose]);
 
   if (!open) return null;
+
+  return <VendorSignatureLightboxContent open={open} onClose={onClose} {...contentProps} />;
+}
+
+function VendorSignatureLightboxContent({
+  onClose,
+  signatoryName,
+  signatoryTitle,
+  signatureText,
+  onApply,
+}: VendorSignatureLightboxProps) {
+  const titleId = useId();
+  const [draftName, setDraftName] = useState(signatoryName);
+  const [draftTitle, setDraftTitle] = useState(signatoryTitle);
+  const [draftSignature, setDraftSignature] = useState(signatureText);
+  const [localError, setLocalError] = useState<string | null>(null);
 
   function handleApply() {
     const name = draftName.trim();
@@ -123,11 +120,7 @@ export function VendorSignatureLightbox({
           <span className={styles.formFieldLabel}>
             Signature <span className={styles.requiredMark}>*</span>
           </span>
-          <VendorSignaturePad
-            key={padSession}
-            initialValue={signatureText}
-            onChange={setDraftSignature}
-          />
+          <VendorSignaturePad initialValue={signatureText} onChange={setDraftSignature} />
         </div>
         {localError ? (
           <p className={styles.formError} role="alert">

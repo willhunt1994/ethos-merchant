@@ -112,8 +112,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   });
 
   const shop = await prisma.shop.findUnique({ where: { shopDomain: ctx.shopDomain } });
-  const { agreement: vendorAgreement, vendorAgreementComplete: vendorAgreementReady } =
-    resolveVendorAgreementState(request, shop, ctx.mode === "preview");
+  const { vendorAgreementComplete: vendorAgreementReady } = resolveVendorAgreementState(
+    request,
+    shop,
+    ctx.mode === "preview",
+  );
 
   const readyCount = rows.filter((r) => r.readyForSubmit).length;
   const allSubmittedOrImported =
@@ -130,7 +133,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     mode: ctx.mode,
     count: rows.length,
     supplier,
-    vendorAgreement,
     vendorAgreementReady,
     readyCount,
     allSubmittedOrImported,
@@ -433,7 +435,6 @@ export default function SelectedProductsPage() {
     rows,
     count,
     supplier,
-    vendorAgreement,
     vendorAgreementReady,
     readyCount,
     allSubmittedOrImported,

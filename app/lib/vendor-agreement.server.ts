@@ -72,7 +72,7 @@ function contactFieldsFromShop(shop: Shop | null): {
   let contactPhone = shop?.vendorAgreementContactPhone?.trim() ?? "";
   const legacy = shop?.vendorAgreementContactInfo?.trim() ?? "";
   if (legacy && (!contactEmail || !contactPhone)) {
-    const parts = legacy.split(/\s*[\/|]\s*/).map((p) => p.trim()).filter(Boolean);
+    const parts = legacy.split(/\s*(?:\/|\|)\s*/).map((p) => p.trim()).filter(Boolean);
     if (!contactEmail && parts[0]) contactEmail = parts[0];
     if (!contactPhone && parts[1]) contactPhone = parts[1];
     if (!contactEmail && legacy.includes("@")) contactEmail = legacy;

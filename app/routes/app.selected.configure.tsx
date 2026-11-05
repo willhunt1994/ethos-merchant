@@ -725,6 +725,12 @@ function ConfigureSelectedProductPageInner({
   const [tierGoalMarginPercents, setTierGoalMarginPercents] = useState(() =>
     defaultGoalMarginPercentsForTierCount(loaderQuantityBreakTiers.length),
   );
+  const tierGoalMargins = useMemo(() => {
+    if (tierGoalMarginPercents.length === quantityBreakTiers.length) {
+      return tierGoalMarginPercents;
+    }
+    return defaultGoalMarginPercentsForTierCount(quantityBreakTiers.length);
+  }, [tierGoalMarginPercents, quantityBreakTiers.length]);
   const skipInitialSuggestedApply = useRef(
     loaderVariants.some((v) =>
       v.quantityTierPrices.some((p) => String(p ?? "").trim() !== ""),
@@ -858,18 +864,23 @@ function ConfigureSelectedProductPageInner({
     [variantRows],
   );
 
-  useEffect(() => {
-    if (allSelectedShareSameEthosPrice && samePriceForAll) {
-      setSamePriceForAll(false);
-    }
-  }, [allSelectedShareSameEthosPrice, samePriceForAll]);
+  const applyPricingToRow = useCallback(
+    (row: ConfigureVariantRow, ethosPrice: string, quantityTierPrices: string[]): ConfigureVariantRow => ({
+      ...row,
+      ethosPrice,
+      quantityTierPrices,
+    }),
+    [],
+  );
+
+  const samePriceForAllEnabled = samePriceForAll && !allSelectedShareSameEthosPrice;
 
   const samePriceForAllControl =
     hasAnyVariantPrice && !allSelectedShareSameEthosPrice ? (
     <label className={styles.samePriceOptionHeader}>
       <input
         type="checkbox"
-        checked={samePriceForAll}
+        checked={samePriceForAllEnabled}
         onChange={(e) => {
           const enabled = e.target.checked;
           setSamePriceForAll(enabled);
@@ -900,15 +911,6 @@ function ConfigureSelectedProductPageInner({
       Same for all selected variants
     </label>
   ) : null;
-
-  const applyPricingToRow = useCallback(
-    (row: ConfigureVariantRow, ethosPrice: string, quantityTierPrices: string[]): ConfigureVariantRow => ({
-      ...row,
-      ethosPrice,
-      quantityTierPrices,
-    }),
-    [],
-  );
 
   const applySuggestedPricingToVariants = useCallback(
     (goalMargins: number[]) => {
@@ -971,13 +973,13 @@ function ConfigureSelectedProductPageInner({
           tiers[0] = ethosPrice;
           return applyPricingToRow(r, ethosPrice, tiers);
         };
-        if (samePriceForAll) {
+        if (samePriceForAllEnabled) {
           return prev.map((r) => (r.selected ? apply(r) : r));
         }
         return prev.map((r) => (r.shopifyVariantGid === shopifyVariantGid ? apply(r) : r));
       });
     },
-    [applyPricingToRow, samePriceForAll],
+    [applyPricingToRow, samePriceForAllEnabled],
   );
 
   const updateQuantityTierPrice = useCallback(
@@ -990,13 +992,13 @@ function ConfigureSelectedProductPageInner({
             tierIndex === 0 ? price : primaryEthosPriceFromTierStrings(tiers) || r.ethosPrice;
           return applyPricingToRow(r, ethosPrice ?? "", tiers);
         };
-        if (samePriceForAll) {
+        if (samePriceForAllEnabled) {
           return prev.map((r) => (r.selected ? apply(r) : r));
         }
         return prev.map((r) => (r.shopifyVariantGid === shopifyVariantGid ? apply(r) : r));
       });
     },
-    [applyPricingToRow, samePriceForAll],
+    [applyPricingToRow, samePriceForAllEnabled],
   );
 
   const [tierApplyOffer, setTierApplyOffer] = useState<{ tierIndex: number; price: string } | null>(
@@ -1034,13 +1036,6 @@ function ConfigureSelectedProductPageInner({
     setTierApplyOffer(null);
   }, [tierApplyOffer, applyPricingToRow]);
 
-  useEffect(() => {
-    setTierGoalMarginPercents((prev) => {
-      if (prev.length === quantityBreakTiers.length) return prev;
-      return defaultGoalMarginPercentsForTierCount(quantityBreakTiers.length);
-    });
-  }, [quantityBreakTiers.length]);
-
   const selectedVariantKey = useMemo(
     () =>
       variantRows
@@ -1056,11 +1051,11 @@ function ConfigureSelectedProductPageInner({
       skipInitialSuggestedApply.current = false;
       return;
     }
-    applySuggestedPricingToVariants(tierGoalMarginPercents);
+    applySuggestedPricingToVariants(tierGoalMargins);
   }, [
     offerQuantityDiscounts,
     useSuggestedQuantityPricing,
-    tierGoalMarginPercents,
+    tierGoalMargins,
     applySuggestedPricingToVariants,
     selectedVariantKey,
   ]);
@@ -1405,20 +1400,18 @@ function ConfigureSelectedProductPageInner({
                                     step={0.1}
                                     inputMode="decimal"
                                     className={styles.goalMarginInput}
-                                    value={tierGoalMarginPercents[tierIndex] ?? ""}
+                                    value={tierGoalMargins[tierIndex] ?? ""}
                                     onChange={(e) => {
                                       const n = Number(e.target.value);
                                       if (!Number.isFinite(n)) return;
-                                      setTierGoalMarginPercents((prev) => {
-                                        const next = [...prev];
-                                        next[tierIndex] = n;
-                                        return next;
-                                      });
+                                      const next = [...tierGoalMargins];
+                                      next[tierIndex] = n;
+                                      setTierGoalMarginPercents(next);
                                     }}
                                     onBlur={(e) => {
                                       const parsed = parseGoalMarginPercentInput(e.target.value);
                                       if (parsed == null) return;
-                                      const next = [...tierGoalMarginPercents];
+                                      const next = [...tierGoalMargins];
                                       next[tierIndex] = parsed;
                                       setGoalMarginsAndApplyPrices(next);
                                     }}

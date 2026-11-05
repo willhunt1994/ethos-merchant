@@ -63,6 +63,7 @@ export function VendorSignaturePad({
     if (isDrawnVendorSignature(initialValue)) {
       loadImageOntoCanvas(initialValue);
     } else {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset pad when signature cleared
       setHasInk(false);
     }
   }, [syncCanvasSize, loadImageOntoCanvas, initialValue]);

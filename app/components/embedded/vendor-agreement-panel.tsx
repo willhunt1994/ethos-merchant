@@ -396,7 +396,12 @@ export function VendorAgreementPanel({
           </a>
         </div>
         <div className={styles.vendorAgreementScrollBlock}>
-          <div className={styles.vendorAgreementScroll} tabIndex={0} aria-label="Agreement text">
+          <div
+            className={styles.vendorAgreementScroll}
+            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- keyboard-scrollable legal text
+            tabIndex={0}
+            aria-label="Agreement text"
+          >
             {vendorAgreementIntroParagraphs().map((p) => (
               <p key={p.slice(0, 40)} className={styles.vendorAgreementParagraph}>
                 {p}
@@ -432,6 +437,7 @@ export function VendorAgreementPanel({
         <div className={styles.vendorAgreementScrollBlock}>
           <div
             className={styles.vendorAgreementScroll}
+            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- keyboard-scrollable legal text
             tabIndex={0}
             aria-label="Schedule A commercial terms"
           >

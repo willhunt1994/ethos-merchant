@@ -72,18 +72,15 @@ export function W9SettingsPanel({
   const [legalBusinessName, setLegalBusinessName] = useState(initialDraft.legalBusinessName);
   const [address, setAddress] = useState<W9AddressParts>(initialDraft.address);
 
-  useEffect(() => {
-    if (saveOk) {
-      setEditing(false);
-    }
-  }, [saveOk]);
+  const inEditMode = editing && !saveOk;
+
+  const fetcherUploadError =
+    uploadFetcher.data?.ok === false ? uploadFetcher.data.error : null;
+  const shownUploadError = uploadError ?? fetcherUploadError ?? null;
 
   useEffect(() => {
     if (uploadFetcher.data?.ok === true) {
-      setUploadError(null);
       void revalidator.revalidate();
-    } else if (uploadFetcher.data?.ok === false && uploadFetcher.data.error) {
-      setUploadError(uploadFetcher.data.error);
     }
   }, [uploadFetcher.data, revalidator]);
 
@@ -179,9 +176,9 @@ export function W9SettingsPanel({
           Download W-9 template
         </a>
       </div>
-      {uploadError ? (
+      {shownUploadError ? (
         <p className={styles.formError} role="alert" style={{ marginTop: "0.5rem" }}>
-          {uploadError}
+          {shownUploadError}
         </p>
       ) : null}
 
@@ -243,14 +240,14 @@ export function W9SettingsPanel({
               Use Shopify Billing Details
             </button>
           ) : null}
-          {hasSaved && !editing ? (
+          {hasSaved && !inEditMode ? (
             <button type="button" className={styles.settingsButton} onClick={startEdit}>
               Edit Tax Details
             </button>
           ) : null}
         </div>
 
-        {hasSaved && !editing ? (
+        {hasSaved && !inEditMode ? (
           <ul className={styles.settingsDetailList} style={{ marginTop: "0.75rem" }}>
             <li className={styles.settingsDetailRow}>
               <span className={styles.settingsDetailKey}>Legal Business Name</span>

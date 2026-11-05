@@ -163,8 +163,9 @@ export function remapQuantityTierPriceStrings(
 
 export function primaryEthosPriceFromTierStrings(
   values: QuantityTierPriceStrings,
-  _tierDefinitions: QuantityTierDefinition[] = DEFAULT_QUANTITY_BREAK_TIERS,
+  tierDefinitions: QuantityTierDefinition[] = DEFAULT_QUANTITY_BREAK_TIERS,
 ): string {
+  void tierDefinitions;
   const first = String(values[0] ?? "").trim();
   if (first) {
     const n = Number.parseFloat(first);
