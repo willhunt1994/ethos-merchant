@@ -5,20 +5,30 @@ import { AppProvider } from "@shopify/shopify-app-react-router/react";
 
 import { EmbeddedAppErrorBoundary } from "../components/embedded-app-error-boundary";
 import { EmbeddedNavigationFix } from "../components/embedded-navigation-fix";
+import { VendorAgreementBanner } from "../components/vendor-agreement-banner";
 import { isLocalPreviewEnabled } from "../config/env.server";
+import prisma from "../db.server";
 import { requireMerchantContext } from "../lib/merchant-auth.server";
+import { resolveVendorAgreementState } from "../lib/vendor-agreement-preview-mock.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await requireMerchantContext(request);
+  const ctx = await requireMerchantContext(request);
+  const shop = await prisma.shop.findUnique({ where: { shopDomain: ctx.shopDomain } });
+  const previewMode = ctx.mode === "preview";
+  const { agreement: vendorAgreement, vendorAgreementComplete } =
+    resolveVendorAgreementState(request, shop, previewMode);
 
   return {
     apiKey: process.env.SHOPIFY_API_KEY || "",
     preview: isLocalPreviewEnabled(),
+    vendorAgreement,
+    vendorAgreementComplete,
   };
 };
 
 export default function App() {
-  const { apiKey, preview } = useLoaderData<typeof loader>();
+  const { apiKey, preview, vendorAgreement, vendorAgreementComplete } =
+    useLoaderData<typeof loader>();
 
   return (
     <AppProvider apiKey={apiKey}>
@@ -45,6 +55,11 @@ export default function App() {
         <s-link href="/app/settings">Settings</s-link>
         <s-link href="/app/contact">Contact</s-link>
       </s-app-nav>
+      {!vendorAgreementComplete ? (
+        <div style={{ padding: "0 16px 8px" }}>
+          <VendorAgreementBanner agreement={vendorAgreement} context="app" />
+        </div>
+      ) : null}
       <Outlet />
     </AppProvider>
   );

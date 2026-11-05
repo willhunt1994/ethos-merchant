@@ -49,6 +49,28 @@ model Shop {
   ethosPayoutsNote              String?   @db.Text
   stripeConnectSyncedAt         DateTime?
   quantityBreakTiers            Json?
+  vendorAgreementVersion        String?
+  vendorAgreementLegalName      String?
+  vendorAgreementDba            String?
+  vendorAgreementEntityType     String?
+  vendorAgreementEntityFormation String?
+  vendorAgreementBusinessAddress String? @db.Text
+  vendorAgreementWebsite        String?
+  vendorAgreementPrimaryContact String?
+  vendorAgreementContactInfo    String?
+  vendorAgreementContactEmail   String?
+  vendorAgreementContactPhone   String?
+  vendorAgreementSignatoryName  String?
+  vendorAgreementSignatoryTitle String?
+  vendorAgreementSignatureText  String?
+  vendorAgreementSignedAt       DateTime?
+  vendorAgreementAudit          Json?
+  vendorAgreementScheduleA      Json?
+  vendorAgreementEthosSignedAt  DateTime?
+  vendorAgreementEthosSignatoryName  String?
+  vendorAgreementEthosSignatoryTitle String?
+  vendorAgreementEthosSignedByRef    String?
+  vendorAgreementEthosSignAudit      Json?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

@@ -7,7 +7,9 @@ import { Link, redirect, useActionData, useLoaderData, useSearchParams } from "r
 import { useEffect } from "react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import prisma from "../db.server";
+import { Prisma } from "@prisma/client";
 import { W9SettingsPanel } from "../components/embedded/w9-settings-panel";
+import { VendorAgreementPanel } from "../components/embedded/vendor-agreement-panel";
 import { SupplierApprovalBanner } from "../components/supplier-approval-banner";
 import styles from "../styles/embedded-app.module.css";
 import { requireMerchantContext } from "../lib/merchant-auth.server";
@@ -41,6 +43,17 @@ import {
   w9FormViewFromShop,
 } from "../lib/w9-form.server";
 import { isMerchantS3Configured } from "../lib/s3.server";
+import {
+  buildVendorAgreementAudit,
+  scheduleAFromFormData,
+  vendorAgreementDraftFromFormData,
+  vendorAgreementShopDataFromDraft,
+  validateVendorAgreementDraft,
+  validateVendorAgreementSign,
+} from "../lib/vendor-agreement.server";
+import { resolveVendorAgreementState } from "../lib/vendor-agreement-preview-mock.server";
+import { isVendorAgreementFullyExecuted } from "../lib/shop-vendor-agreement.server";
+import { CURRENT_VENDOR_AGREEMENT_VERSION } from "../lib/vendor-agreement-content";
 
 const DEFAULT_W9_TEMPLATE_URL = "https://www.irs.gov/pub/irs-pdf/fw9.pdf";
 
@@ -77,6 +90,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     payout = payoutReadinessFromShop(refreshed, stripeConfigured);
   }
 
+  const vendorAgreementState = resolveVendorAgreementState(
+    request,
+    shop,
+    ctx.mode === "preview",
+  );
+
   return {
     mode: ctx.mode,
     shopDomain: ctx.shopDomain,
@@ -100,8 +119,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       businessAddress: shopifyBilling?.businessAddress ?? "",
       available: Boolean(shopifyBilling?.legalBusinessName || shopifyBilling?.businessAddress),
     },
-    payout,
+    payout:
+      ctx.mode === "preview"
+        ? {
+            ...payout,
+            vendorAgreementExecuted: vendorAgreementState.vendorAgreementFullyExecuted,
+          }
+        : payout,
     quantityBreakTiers: quantityBreakTiersFromShopRecord(shop?.quantityBreakTiers),
+    vendorAgreement: vendorAgreementState.agreement,
+    vendorAgreementPreviewFlags: vendorAgreementState.previewFlags,
   };
 };
 
@@ -132,6 +159,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     if (intent === "refresh-payout-status") {
       await refreshConnectAccountForShop(ctx.shopDomain);
       return redirect("/app/settings?section=payout");
+    }
+
+    if (!isVendorAgreementFullyExecuted(shop)) {
+      return Response.json(
+        {
+          ok: false,
+          error:
+            "Complete the vendor agreement (including Schedule A and Ethos acceptance) before connecting a payout bank account.",
+        },
+        { status: 403 },
+      );
     }
 
     const onboardingUrl = shop.stripeConnectAccountId
@@ -193,6 +231,70 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       update: { quantityBreakTiers: payload },
     });
     return Response.json({ ok: true, intent: "save-quantity-break-tiers" as const });
+  }
+
+  if (intent === "save-vendor-agreement-draft") {
+    const draft = vendorAgreementDraftFromFormData(form);
+    const schedule = scheduleAFromFormData(form);
+    const error = validateVendorAgreementDraft(draft, schedule);
+    if (error) {
+      return Response.json({ ok: false, error, intent: "save-vendor-agreement-draft" }, { status: 400 });
+    }
+    await prisma.shop.upsert({
+      where: { shopDomain: ctx.shopDomain },
+      create: {
+        shopDomain: ctx.shopDomain,
+        ...vendorAgreementShopDataFromDraft(draft, schedule),
+      },
+      update: vendorAgreementShopDataFromDraft(draft, schedule),
+    });
+    return Response.json({ ok: true, intent: "save-vendor-agreement-draft" as const });
+  }
+
+  if (intent === "sign-vendor-agreement") {
+    if (ctx.mode === "preview") {
+      return Response.json(
+        { ok: false, error: "Not available in local preview", intent: "sign-vendor-agreement" },
+        { status: 400 },
+      );
+    }
+    const draft = vendorAgreementDraftFromFormData(form);
+    const schedule = scheduleAFromFormData(form);
+    const error = validateVendorAgreementSign(draft, schedule, {
+      certifyAccurate: form.get("certifyAccurate") === "yes",
+      consentEsign: form.get("consentEsign") === "yes",
+    });
+    if (error) {
+      return Response.json({ ok: false, error, intent: "sign-vendor-agreement" }, { status: 400 });
+    }
+    const signedAt = new Date();
+    await prisma.shop.upsert({
+      where: { shopDomain: ctx.shopDomain },
+      create: {
+        shopDomain: ctx.shopDomain,
+        ...vendorAgreementShopDataFromDraft(draft, schedule),
+        vendorAgreementVersion: CURRENT_VENDOR_AGREEMENT_VERSION,
+        vendorAgreementSignedAt: signedAt,
+        vendorAgreementAudit: buildVendorAgreementAudit(request, ctx.shopDomain),
+        vendorAgreementEthosSignedAt: null,
+        vendorAgreementEthosSignatoryName: null,
+        vendorAgreementEthosSignatoryTitle: null,
+        vendorAgreementEthosSignedByRef: null,
+        vendorAgreementEthosSignAudit: Prisma.JsonNull,
+      },
+      update: {
+        ...vendorAgreementShopDataFromDraft(draft, schedule),
+        vendorAgreementVersion: CURRENT_VENDOR_AGREEMENT_VERSION,
+        vendorAgreementSignedAt: signedAt,
+        vendorAgreementAudit: buildVendorAgreementAudit(request, ctx.shopDomain),
+        vendorAgreementEthosSignedAt: null,
+        vendorAgreementEthosSignatoryName: null,
+        vendorAgreementEthosSignatoryTitle: null,
+        vendorAgreementEthosSignedByRef: null,
+        vendorAgreementEthosSignAudit: Prisma.JsonNull,
+      },
+    });
+    return Response.json({ ok: true, intent: "sign-vendor-agreement" as const });
   }
 
   if (intent !== "save-w9") {
@@ -259,6 +361,7 @@ function formatDateTime(iso: string | null): string {
 
 const SETTINGS_SECTIONS = [
   { id: "shopify", label: "Shopify Connection" },
+  { id: "vendor-agreement", label: "Vendor Agreement" },
   { id: "w9", label: "W-9 Tax Form" },
   { id: "payout", label: "Payout Bank Account" },
   { id: "quantity-tiers", label: "Quantity Break Tiers" },
@@ -290,6 +393,8 @@ export default function SettingsPage() {
     payout,
     isAccountOwner,
     quantityBreakTiers,
+    vendorAgreement,
+    vendorAgreementPreviewFlags,
   } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const saveOk =
@@ -309,6 +414,24 @@ export default function SettingsPage() {
     typeof actionData === "object" &&
     "ok" in actionData &&
     (actionData as { ok?: boolean }).ok === false
+      ? String((actionData as { error?: string }).error ?? "")
+      : null;
+  const vendorDraftSaveOk =
+    actionData != null &&
+    typeof actionData === "object" &&
+    (actionData as { ok?: boolean }).ok === true &&
+    (actionData as { intent?: string }).intent === "save-vendor-agreement-draft";
+  const vendorSignOk =
+    actionData != null &&
+    typeof actionData === "object" &&
+    (actionData as { ok?: boolean }).ok === true &&
+    (actionData as { intent?: string }).intent === "sign-vendor-agreement";
+  const vendorAgreementActionError =
+    actionData != null &&
+    typeof actionData === "object" &&
+    (actionData as { ok?: boolean }).ok === false &&
+    ((actionData as { intent?: string }).intent === "save-vendor-agreement-draft" ||
+      (actionData as { intent?: string }).intent === "sign-vendor-agreement")
       ? String((actionData as { error?: string }).error ?? "")
       : null;
 
@@ -338,6 +461,12 @@ export default function SettingsPage() {
       setSearchParams({ section: "quantity-tiers" }, { replace: true });
     }
   }, [quantityTiersSaveOk, setSearchParams]);
+
+  useEffect(() => {
+    if (vendorDraftSaveOk || vendorSignOk) {
+      setSearchParams({ section: "vendor-agreement" }, { replace: true });
+    }
+  }, [vendorDraftSaveOk, vendorSignOk, setSearchParams]);
 
   const setActiveSection = (section: SettingsSectionId) => {
     setSearchParams({ section }, { replace: true });
@@ -448,6 +577,23 @@ export default function SettingsPage() {
               </div>
             ) : null}
 
+            {activeSection === "vendor-agreement" ? (
+              <VendorAgreementPanel
+                agreement={vendorAgreement}
+                previewMode={mode === "preview"}
+                saveOk={vendorDraftSaveOk}
+                signOk={vendorSignOk}
+                actionError={vendorAgreementActionError}
+                prefillLegalName={w9.savedLegalBusinessName || shopifyBilling.legalBusinessName}
+                prefillBusinessAddress={
+                  w9.savedBusinessAddress || shopifyBilling.businessAddress
+                }
+                vendorAgreementPreviewFlags={
+                  mode === "preview" ? vendorAgreementPreviewFlags : undefined
+                }
+              />
+            ) : null}
+
             {activeSection === "w9" ? (
               <W9SettingsPanel
                 initialLegalBusinessName={w9.legalBusinessName}
@@ -467,11 +613,13 @@ export default function SettingsPage() {
             ) : null}
 
             {activeSection === "payout" ? (
-              <PayoutSettingsPanel
-                payout={payout}
-                canManage={isAccountOwner && mode !== "preview"}
-                previewMode={mode === "preview"}
-              />
+              <>
+                <PayoutSettingsPanel
+                  payout={payout}
+                  canManage={isAccountOwner && mode !== "preview"}
+                  previewMode={mode === "preview"}
+                />
+              </>
             ) : null}
 
             {activeSection === "quantity-tiers" ? (

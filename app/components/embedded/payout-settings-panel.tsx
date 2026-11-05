@@ -62,6 +62,13 @@ export function PayoutSettingsPanel({ payout, canManage, previewMode }: PayoutSe
         </p>
       ) : null}
 
+      {!payout.vendorAgreementExecuted ? (
+        <p className={styles.settingsHelpText}>
+          Payout bank connection requires a fully executed vendor agreement (your signature,
+          Schedule A, and Ethos countersignature).
+        </p>
+      ) : null}
+
       {requirements && payout.requirementsDue ? (
         <div className={styles.settingsHelpText}>
           <p>Stripe needs additional information before payouts can go live:</p>
@@ -89,7 +96,11 @@ export function PayoutSettingsPanel({ payout, canManage, previewMode }: PayoutSe
           <>
             <Form method="post">
               <input type="hidden" name="intent" value="start-payout-onboarding" />
-              <button type="submit" className={styles.primarySubmitButton} disabled={busy}>
+              <button
+                type="submit"
+                className={styles.primarySubmitButton}
+                disabled={busy || !payout.vendorAgreementExecuted}
+              >
                 {payout.stripeConnectAccountId ? "Update Bank Details" : "Connect Bank Account"}
               </button>
             </Form>

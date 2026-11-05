@@ -1,5 +1,6 @@
 import type { Shop } from "@prisma/client";
 import prisma from "../../db.server";
+import { isVendorAgreementFullyExecuted } from "../shop-vendor-agreement.server";
 import type { ConnectOnboardingStatus, StripeRequirementsSnapshot } from "./connect.server";
 
 export type PayoutStatusLabel =
@@ -21,6 +22,7 @@ export type PayoutReadiness = {
   requirementsDue: StripeRequirementsSnapshot | null;
   syncedAt: string | null;
   w9Complete: boolean;
+  vendorAgreementExecuted: boolean;
 };
 
 function onboardingStatusFromShop(shop: Shop): ConnectOnboardingStatus {
@@ -72,6 +74,7 @@ export function payoutReadinessFromShop(shop: Shop, stripeConfigured: boolean): 
   const w9Complete = Boolean(
     shop.w9LegalBusinessName?.trim() && shop.w9BusinessAddress?.trim(),
   );
+  const vendorAgreementExecuted = isVendorAgreementFullyExecuted(shop);
 
   return {
     configured: stripeConfigured,
@@ -85,6 +88,7 @@ export function payoutReadinessFromShop(shop: Shop, stripeConfigured: boolean): 
     requirementsDue,
     syncedAt: shop.stripeConnectSyncedAt?.toISOString() ?? null,
     w9Complete,
+    vendorAgreementExecuted,
   };
 }
 
@@ -114,6 +118,28 @@ export async function getPayoutReadiness(shopDomain: string): Promise<PayoutRead
         ethosPayoutsNote: null,
         stripeConnectSyncedAt: null,
         quantityBreakTiers: null,
+        vendorAgreementVersion: null,
+        vendorAgreementLegalName: null,
+        vendorAgreementDba: null,
+        vendorAgreementEntityType: null,
+        vendorAgreementEntityFormation: null,
+        vendorAgreementBusinessAddress: null,
+        vendorAgreementWebsite: null,
+        vendorAgreementPrimaryContact: null,
+        vendorAgreementContactInfo: null,
+        vendorAgreementContactEmail: null,
+        vendorAgreementContactPhone: null,
+        vendorAgreementSignatoryName: null,
+        vendorAgreementSignatoryTitle: null,
+        vendorAgreementSignatureText: null,
+        vendorAgreementSignedAt: null,
+        vendorAgreementAudit: null,
+        vendorAgreementScheduleA: null,
+        vendorAgreementEthosSignedAt: null,
+        vendorAgreementEthosSignatoryName: null,
+        vendorAgreementEthosSignatoryTitle: null,
+        vendorAgreementEthosSignedByRef: null,
+        vendorAgreementEthosSignAudit: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       },

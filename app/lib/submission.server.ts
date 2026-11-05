@@ -5,6 +5,7 @@ import { importProductToEthos, type EthosImportProductPayload } from "./ethos-in
 import { fetchConfigureVariants } from "./shopify/variants.server";
 import { fetchProductSummariesByGids } from "./shopify/products.server";
 import { getShopSupplierLinkView } from "./shop-supplier.server";
+import { resolveVendorAgreementState } from "./vendor-agreement-preview-mock.server";
 import { MOCK_CATALOG_PRODUCTS } from "./mock-catalog";
 import {
   parseFilledQuantityTierStrings,
@@ -29,7 +30,10 @@ function decimalToNumber(value: Decimal | null | undefined): number | null {
   return Number(value.toString());
 }
 
-export async function submitSelectedProducts(ctx: MerchantContext): Promise<SubmitSelectionResult> {
+export async function submitSelectedProducts(
+  ctx: MerchantContext,
+  request: Request,
+): Promise<SubmitSelectionResult> {
   const supplier = await getShopSupplierLinkView(ctx.shopDomain, {
     previewMode: ctx.mode === "preview",
   });
@@ -37,6 +41,25 @@ export async function submitSelectedProducts(ctx: MerchantContext): Promise<Subm
   if (!supplier.canSubmit || !supplier.ethosSupplierSlug) {
     return { ok: false, imported: 0, failed: 0, skipped: 0, errors: ["Supplier is not approved for submission."] };
   }
+
+  const shop = await prisma.shop.findUnique({ where: { shopDomain: ctx.shopDomain } });
+  const { vendorAgreementComplete } = resolveVendorAgreementState(
+    request,
+    shop,
+    ctx.mode === "preview",
+  );
+  if (!vendorAgreementComplete) {
+    return {
+      ok: false,
+      imported: 0,
+      failed: 0,
+      skipped: 0,
+      errors: [
+        "Vendor agreement and Schedule A must be completed in Settings before submitting products.",
+      ],
+    };
+  }
+
   const supplierSlug = supplier.ethosSupplierSlug;
 
   const selections = await prisma.productSelection.findMany({

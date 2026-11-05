@@ -5,6 +5,7 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import prisma from "../db.server";
 import { PLACEHOLDER_IMAGE } from "../lib/catalog-product";
 import { SupplierApprovalBanner } from "../components/supplier-approval-banner";
+import { resolveVendorAgreementState } from "../lib/vendor-agreement-preview-mock.server";
 import styles from "../styles/embedded-app.module.css";
 import { EmptyState } from "../components/embedded/empty-state";
 import { requireMerchantContext } from "../lib/merchant-auth.server";
@@ -32,8 +33,8 @@ import {
 } from "../components/embedded/config-check-item";
 
 const SUBMISSION_STEPS = [
-  "Set at least the 1–24 pcs price on every selected variant (extra tiers optional)",
-  "When offering customization, choose at least one customization type and upload design files",
+  "Configure pricing per variant. Set your own pricing and tiers.",
+  "Choose optional customization options for the products.",
   "Submit items to the Ethos catalog when complete.",
 ] as const;
 
@@ -110,6 +111,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     previewMode: ctx.mode === "preview",
   });
 
+  const shop = await prisma.shop.findUnique({ where: { shopDomain: ctx.shopDomain } });
+  const { agreement: vendorAgreement, vendorAgreementComplete: vendorAgreementReady } =
+    resolveVendorAgreementState(request, shop, ctx.mode === "preview");
+
   const readyCount = rows.filter((r) => r.readyForSubmit).length;
   const allSubmittedOrImported =
     rows.length > 0 &&
@@ -125,6 +130,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     mode: ctx.mode,
     count: rows.length,
     supplier,
+    vendorAgreement,
+    vendorAgreementReady,
     readyCount,
     allSubmittedOrImported,
   };
@@ -137,7 +144,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return Response.json({ ok: false, error: "Unknown intent" }, { status: 400 });
   }
 
-  const result = await submitSelectedProducts(ctx);
+  const result = await submitSelectedProducts(ctx, request);
   return result;
 };
 
@@ -422,8 +429,15 @@ function submitButtonLabel(options: {
 }
 
 export default function SelectedProductsPage() {
-  const { rows, count, supplier, readyCount, allSubmittedOrImported } =
-    useLoaderData<typeof loader>();
+  const {
+    rows,
+    count,
+    supplier,
+    vendorAgreement,
+    vendorAgreementReady,
+    readyCount,
+    allSubmittedOrImported,
+  } = useLoaderData<typeof loader>();
   const actionData = useActionData<SubmitSelectionResult>();
   const navigation = useNavigation();
   const submitting = navigation.state === "submitting";
@@ -585,7 +599,11 @@ export default function SelectedProductsPage() {
                         : styles.primarySubmitButton
                     }
                     disabled={
-                      !supplier.canSubmit || readyCount === 0 || submitting || showSubmittedButton
+                      !supplier.canSubmit ||
+                      !vendorAgreementReady ||
+                      readyCount === 0 ||
+                      submitting ||
+                      showSubmittedButton
                     }
                   >
                     {submitLabel}

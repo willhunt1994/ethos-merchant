@@ -1,6 +1,7 @@
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { Link, useLoaderData } from "react-router";
+import { OnboardingChecklistPanel } from "../components/embedded/onboarding-checklist";
 import { SupplierApprovalBanner } from "../components/supplier-approval-banner";
 import styles from "../styles/embedded-app.module.css";
 import { loadAppDashboard } from "../lib/dashboard.server";
@@ -15,7 +16,11 @@ const WORKFLOW_STEPS = [
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const ctx = await requireMerchantContext(request);
-  const dashboard = await loadAppDashboard(ctx.shopDomain, ctx.mode === "preview");
+  const dashboard = await loadAppDashboard(
+    ctx.shopDomain,
+    ctx.mode === "preview",
+    request,
+  );
   return { shopDomain: ctx.shopDomain, mode: ctx.mode, ...dashboard };
 };
 
@@ -36,6 +41,7 @@ export default function AppHome() {
     readyToSubmit,
     needsPricing,
     lastSubmission,
+    onboardingChecklist,
   } = useLoaderData<typeof loader>();
 
   const primaryHref =
@@ -55,6 +61,10 @@ export default function AppHome() {
   return (
     <s-page heading="Ethos Merch">
       <SupplierApprovalBanner supplier={supplier} />
+
+      <s-section>
+        <OnboardingChecklistPanel checklist={onboardingChecklist} />
+      </s-section>
 
       <s-section>
         <h2 className={styles.sectionTitle}>Overview</h2>
