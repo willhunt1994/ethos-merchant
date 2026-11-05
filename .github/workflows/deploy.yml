@@ -1,0 +1,38 @@
+# Deploy to Railway after CI passes on main. Requires RAILWAY_TOKEN (Railway project token).
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli@4.12.0
+
+      - name: Deploy to Railway (ethos-merchant-shopify)
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_PROJECT_ID: f2edf382-3543-4717-adf4-4a6d5d93afca
+          RAILWAY_SERVICE_ID: bcac3a3b-299f-4cea-88e4-d980496b7be2
+          RAILWAY_ENVIRONMENT_ID: 94c89262-f9de-4096-a13e-3369d6e7ee6e
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::warning::RAILWAY_TOKEN is not set. Skipping deploy."
+            echo "Create a token in Railway → Project → Settings → Tokens, then add it as a GitHub repo secret named RAILWAY_TOKEN."
+            echo "Until then, deploy manually: railway up -y -d"
+            exit 0
+          fi
+          railway up --detach --ci -y

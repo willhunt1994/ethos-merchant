@@ -93,4 +93,12 @@ Phase 9 E2E (dev store): [docs/phase-9-e2e-dev-store.md](./docs/phase-9-e2e-dev-
 
 ## Railway
 
-Project **wonderful-adventure** · service **Postgres** (integration DB) · redeploy app service when linked to this repo.
+Project **wonderful-adventure** · app service **ethos-merchant-shopify** → https://ethos-merchant-shopify-production.up.railway.app · Postgres holds integration data.
+
+**Deploy after merge to `main`:**
+
+1. **CI must pass** (GitHub Actions). A red CI email does **not** roll back production; it only means that commit was not validated.
+2. **Production app:** either add a GitHub secret `RAILWAY_TOKEN` (Railway → Project → Settings → Tokens) so the **Deploy** workflow runs after green CI, or from this repo run `railway up -y -d` (requires Railway CLI login).
+3. **Shopify app URL / webhooks:** `pnpm run deploy -- --allow-updates --no-build` (Partner CLI auth on your machine).
+
+In Railway, connect the service to **`willhunt1994/ethos-merchant`** (not the legacy `ethos-merchant-shopify` repo) if you want GitHub push deploys without `railway up`.
