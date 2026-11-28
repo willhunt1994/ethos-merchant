@@ -9,7 +9,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     headers: {
       "Content-Type": "application/pdf",
       "Content-Disposition": 'attachment; filename="ethos-vendor-agreement-terms.pdf"',
-      "Cache-Control": "private, max-age=300",
+      "Cache-Control":
+        process.env.NODE_ENV === "production"
+          ? "private, max-age=300"
+          : "no-store",
     },
   });
 };

@@ -1,7 +1,10 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import PDFDocument from "pdfkit";
-import { SCHEDULE_A_SECTIONS } from "./vendor-agreement-schedule-a";
+import {
+  SCHEDULE_A_INTRO_PARAGRAPHS,
+  SCHEDULE_A_SECTIONS,
+} from "./vendor-agreement-schedule-a";
 import {
   VENDOR_AGREEMENT_SECTIONS,
   VENDOR_AGREEMENT_TITLE,
@@ -11,8 +14,8 @@ import {
 import type { VendorAgreementView } from "./vendor-agreement.server";
 import { isDrawnVendorSignature } from "./vendor-signature";
 
+/** Keep body text above this y; leaves room for footer inside the bottom margin. */
 const CONTENT_BOTTOM = 696;
-const FOOTER_Y = 756;
 
 function ethosLogoPath(): string {
   return join(process.cwd(), "public/assets/ethos-logo-black.png");
@@ -87,21 +90,29 @@ function renderBodySections(
 
 function renderFootersOnAllPages(doc: PdfDoc) {
   const notice = copyrightNotice();
-  const range = doc.bufferedPageRange();
-  const textWidth =
-    doc.page.width - doc.page.margins.left - doc.page.margins.right;
+  const { start, count } = doc.bufferedPageRange();
+  const fontSize = 8;
 
-  for (let i = 0; i < range.count; i++) {
-    doc.switchToPage(range.start + i);
+  for (let i = start; i < start + count; i++) {
+    doc.switchToPage(i);
+    const page = doc.page;
+    const textWidth = page.width - page.margins.left - page.margins.right;
+    const savedBottomMargin = page.margins.bottom;
+    // Drawing below the margin box used to auto-add blank pages (one per footer).
+    page.margins.bottom = 0;
+    const footerY = page.height - savedBottomMargin - fontSize;
+
     doc
       .font("Helvetica")
-      .fontSize(8)
+      .fontSize(fontSize)
       .fillColor("#888888")
-      .text(notice, doc.page.margins.left, FOOTER_Y, {
+      .text(notice, page.margins.left, footerY, {
         width: textWidth,
         align: "center",
         lineBreak: false,
       });
+
+    page.margins.bottom = savedBottomMargin;
   }
 }
 
@@ -148,9 +159,7 @@ export async function buildVendorAgreementTermsPdf(): Promise<Buffer> {
 export async function buildScheduleATermsPdf(): Promise<Buffer> {
   return buildStyledTermsPdf({
     title: "Schedule A — Commercial Terms",
-    introParagraphs: [
-      "Standard commercial terms incorporated into the Ethos Vendor Registration & Marketplace Participation Agreement.",
-    ],
+    introParagraphs: SCHEDULE_A_INTRO_PARAGRAPHS,
     sections: SCHEDULE_A_SECTIONS.map((s) => ({
       title: s.title,
       paragraphs: s.paragraphs,
@@ -252,6 +261,7 @@ export async function buildVendorAgreementSignedPdf(
 
     doc.addPage();
     renderPdfHeader(doc, "Schedule A — Commercial Terms");
+    renderIntroParagraphs(doc, SCHEDULE_A_INTRO_PARAGRAPHS);
     renderBodySections(
       doc,
       SCHEDULE_A_SECTIONS.map((s) => ({ title: s.title, paragraphs: s.paragraphs })),

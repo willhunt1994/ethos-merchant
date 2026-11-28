@@ -15,6 +15,11 @@ export type ScheduleASection = {
   paragraphs: string[];
 };
 
+/** Introductory copy at the top of the Schedule A terms scroll / PDF. */
+export const SCHEDULE_A_INTRO_PARAGRAPHS: string[] = [
+  "Commercial model, seller of record, SKU lists, pricing, payouts, shipping, returns, tax, insurance and other transaction-specific terms are completed with Ethos before live transactions. Schedule A will be incorporated when agreed in writing or through an accepted order.",
+];
+
 /** Default Schedule A commercial terms (draft — legal review before execution). */
 export const SCHEDULE_A_SECTIONS: ScheduleASection[] = [
   {

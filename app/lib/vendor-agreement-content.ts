@@ -180,13 +180,6 @@ export const VENDOR_AGREEMENT_SECTIONS: VendorAgreementSection[] = [
       "The parties consent to electronic records and signatures, subject to applicable electronic transactions law. The Platform retains the final accepted document version, signer identity, signature date/time, consent record and an appropriate audit trail.",
     ],
   },
-  {
-    id: "schedule-a",
-    title: "Schedule A — Commercial Terms",
-    paragraphs: [
-      "Commercial model, seller of record, SKU lists, pricing, payouts, shipping, returns, tax, insurance and other transaction-specific terms are completed with Ethos before live transactions. Schedule A will be incorporated when agreed in writing or through an accepted order.",
-    ],
-  },
 ];
 
 export const VENDOR_AGREEMENT_PDF_PATH = "/legal/ethos-vendor-marketplace-agreement.pdf";

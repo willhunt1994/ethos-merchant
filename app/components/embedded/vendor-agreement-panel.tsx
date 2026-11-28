@@ -20,6 +20,7 @@ import {
 } from "../../lib/vendor-agreement-pdf-paths";
 import {
   CURRENT_SCHEDULE_A_VERSION,
+  SCHEDULE_A_INTRO_PARAGRAPHS,
   SCHEDULE_A_SECTIONS,
 } from "../../lib/vendor-agreement-schedule-a";
 import type { VendorAgreementPreviewFlags } from "../../lib/vendor-agreement-preview-mock";
@@ -441,6 +442,11 @@ export function VendorAgreementPanel({
             tabIndex={0}
             aria-label="Schedule A commercial terms"
           >
+            {SCHEDULE_A_INTRO_PARAGRAPHS.map((p) => (
+              <p key={p.slice(0, 40)} className={styles.vendorAgreementParagraph}>
+                {p}
+              </p>
+            ))}
             {SCHEDULE_A_SECTIONS.map((section) => (
               <article key={section.id} className={styles.vendorAgreementSection}>
                 <h4 className={styles.vendorAgreementSectionTitle}>{section.title}</h4>
