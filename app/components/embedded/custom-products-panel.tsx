@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { CustomProductDetailDrawer } from "./custom-product-detail-drawer";
 import { EmptyState } from "./empty-state";
 import styles from "../../styles/embedded-app.module.css";
@@ -188,19 +188,9 @@ export function CustomProductsPanel({ products, previewMode }: CustomProductsPan
     return ranks;
   }, [filteredAndSorted]);
 
-  useEffect(() => {
-    setPage(1);
-  }, [query, baseProductGid, statusFilter, sortBy]);
-
   const totalCount = filteredAndSorted.length;
   const totalPages = Math.max(1, Math.ceil(totalCount / CUSTOM_PRODUCTS_PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
-
-  useEffect(() => {
-    if (page > totalPages) {
-      setPage(totalPages);
-    }
-  }, [page, totalPages]);
 
   const paginatedProducts = useMemo(() => {
     const start = (safePage - 1) * CUSTOM_PRODUCTS_PAGE_SIZE;
@@ -271,13 +261,19 @@ export function CustomProductsPanel({ products, previewMode }: CustomProductsPan
             className={styles.fieldGrow}
             placeholder="Search title or SKU"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setPage(1);
+            }}
             aria-label="Search custom products"
           />
           <select
             className={`${styles.fieldSelect} ${styles.customProductsBaseProductFilter}`}
             value={baseProductGid}
-            onChange={(e) => setBaseProductGid(e.target.value)}
+            onChange={(e) => {
+              setBaseProductGid(e.target.value);
+              setPage(1);
+            }}
             aria-label="Filter by base product customized from"
           >
             <option value="">All Base Products</option>
@@ -290,7 +286,10 @@ export function CustomProductsPanel({ products, previewMode }: CustomProductsPan
           <select
             className={`${styles.fieldSelect} ${styles.customProductsStatusFilter}`}
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as "" | CustomProductStatus)}
+            onChange={(e) => {
+              setStatusFilter(e.target.value as "" | CustomProductStatus);
+              setPage(1);
+            }}
             aria-label="Filter by custom product status"
           >
             <option value="">All Statuses</option>
@@ -303,7 +302,10 @@ export function CustomProductsPanel({ products, previewMode }: CustomProductsPan
           <select
             className={`${styles.fieldSelect} ${styles.customProductsSortFilter}`}
             value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as CustomProductsSort)}
+            onChange={(e) => {
+              setSortBy(e.target.value as CustomProductsSort);
+              setPage(1);
+            }}
             aria-label="Sort custom products"
           >
             <option value="top_performing">Top Performing</option>
@@ -388,7 +390,7 @@ export function CustomProductsPanel({ products, previewMode }: CustomProductsPan
                     type="button"
                     className={styles.settingsButton}
                     disabled={safePage <= 1}
-                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    onClick={() => setPage(safePage - 1)}
                   >
                     Previous
                   </button>
@@ -399,7 +401,7 @@ export function CustomProductsPanel({ products, previewMode }: CustomProductsPan
                     type="button"
                     className={styles.settingsButton}
                     disabled={safePage >= totalPages}
-                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    onClick={() => setPage(safePage + 1)}
                   >
                     Next
                   </button>

@@ -53,16 +53,21 @@ function galleryForProduct(product: MockCustomProduct): string[] {
   return [primary, ...extras].slice(0, 4);
 }
 
-export function CustomProductDetailDrawer({
+type CustomProductDetailDrawerPanelProps = {
+  product: MockCustomProduct;
+  titleId: string;
+  onClose: () => void;
+};
+
+function CustomProductDetailDrawerPanel({
   product,
-  open,
+  titleId,
   onClose,
-}: CustomProductDetailDrawerProps) {
-  const titleId = useId();
+}: CustomProductDetailDrawerPanelProps) {
   const [slideIndex, setSlideIndex] = useState(0);
   const [entered, setEntered] = useState(false);
 
-  const slides = product ? galleryForProduct(product) : [];
+  const slides = galleryForProduct(product);
   const slideCount = slides.length;
 
   const goPrev = useCallback(() => {
@@ -76,17 +81,11 @@ export function CustomProductDetailDrawer({
   }, [slideCount]);
 
   useEffect(() => {
-    if (!open || !product) {
-      setEntered(false);
-      return;
-    }
-    setSlideIndex(0);
     const frame = requestAnimationFrame(() => setEntered(true));
     return () => cancelAnimationFrame(frame);
-  }, [open, product?.id, product]);
+  }, []);
 
   useEffect(() => {
-    if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
       if (event.key === "ArrowLeft") goPrev();
@@ -94,22 +93,17 @@ export function CustomProductDetailDrawer({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open, onClose, goPrev, goNext]);
+  }, [onClose, goPrev, goNext]);
 
   useEffect(() => {
-    if (!open) return;
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = prevOverflow;
     };
-  }, [open]);
+  }, []);
 
-  if (!open || !product || typeof document === "undefined") {
-    return null;
-  }
-
-  return createPortal(
+  return (
     <div
       className={styles.customProductDrawerOverlay}
       role="presentation"
@@ -227,7 +221,28 @@ export function CustomProductDetailDrawer({
           </ul>
         </div>
       </aside>
-    </div>,
+    </div>
+  );
+}
+
+export function CustomProductDetailDrawer({
+  product,
+  open,
+  onClose,
+}: CustomProductDetailDrawerProps) {
+  const titleId = useId();
+
+  if (!open || !product || typeof document === "undefined") {
+    return null;
+  }
+
+  return createPortal(
+    <CustomProductDetailDrawerPanel
+      key={product.id}
+      product={product}
+      titleId={titleId}
+      onClose={onClose}
+    />,
     document.body,
   );
 }
