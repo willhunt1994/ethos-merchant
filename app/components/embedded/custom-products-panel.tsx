@@ -57,10 +57,6 @@ function formatDate(iso: string | null): string {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(iso));
 }
 
-function formatCurrencyUsd(raw: string): string {
-  return `$${raw}`;
-}
-
 function parseUsdAmount(raw: string): number {
   const n = Number(raw.replace(/,/g, ""));
   return Number.isFinite(n) ? n : 0;
@@ -234,14 +230,13 @@ export function CustomProductsPanel({ products, previewMode }: CustomProductsPan
         ) : null}
         <div className={`${styles.pageTitleRow} ${styles.customProductsOverviewHeader}`}>
           <h2 className={styles.pageHeading}>Overview</h2>
-          <a
-            href="#"
+          <button
+            type="button"
             className={styles.customProductsReportsLink}
-            onClick={(event) => event.preventDefault()}
-            aria-disabled="true"
+            disabled
           >
             Reports <span aria-hidden>↗</span>
-          </a>
+          </button>
         </div>
         <div className={styles.customProductsMetricGrid}>
           <article className={styles.customProductsMetricCard}>
